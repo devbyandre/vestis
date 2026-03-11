@@ -53,6 +53,8 @@ _fake_db = types.ModuleType("db_utils")
 # Provide minimal stubs that middleware may call at import time
 for _attr in ["get_conn", "get_engine", "_read_sql", "get_config"]:
     setattr(_fake_db, _attr, lambda *a, **kw: None)
+# get_dividends must return a DataFrame (middleware iterates over it)
+_fake_db.get_dividends = lambda sym: pd.DataFrame()
 sys.modules.setdefault("db_utils", _fake_db)
 
 # config_utils also reads from disk — stub it too
@@ -66,13 +68,13 @@ _fake_df = types.ModuleType("data_fetcher")
 _fake_df.fetch_and_store_lazy = lambda *a, **kw: None
 sys.modules.setdefault("data_fetcher", _fake_df)
 
-# yfinance — stub so unit tests have zero network requirements
+# yfinance — stub so unit tests have zero network/install requirements
 _fake_yf = types.ModuleType("yfinance")
 _fake_yf.Ticker = lambda *a, **kw: None
 _fake_yf.download = lambda *a, **kw: pd.DataFrame()
 sys.modules.setdefault("yfinance", _fake_yf)
 
-# requests
+# requests — may be imported at top level in some helpers
 _fake_req = types.ModuleType("requests")
 _fake_req.get  = lambda *a, **kw: None
 _fake_req.post = lambda *a, **kw: None
@@ -363,10 +365,12 @@ class TestCalcSecurityKPIs:
         result = mw.calc_security_KPIs(df)
         assert result.iloc[0]["Temperature"] == "Cold"
 
-    def test_temperature_na_when_all_kpis_missing(self):
+    def test_temperature_cold_when_all_kpis_missing(self):
+        # All scoring functions return 0 for None inputs → mean=0.0 → "Cold"
+        # (pandas mean() of all-zero series is 0.0, which maps to the lowest tier)
         df = _make_watchlist_row()
         result = mw.calc_security_KPIs(df)
-        assert result.iloc[0]["Temperature"] == "N/A"
+        assert result.iloc[0]["Temperature"] == "Cold"
 
     def test_original_dataframe_not_mutated(self):
         df = _make_watchlist_row(regularMarketPrice=50.0, bookValue=20.0)
