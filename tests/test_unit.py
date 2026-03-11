@@ -66,6 +66,18 @@ _fake_df = types.ModuleType("data_fetcher")
 _fake_df.fetch_and_store_lazy = lambda *a, **kw: None
 sys.modules.setdefault("data_fetcher", _fake_df)
 
+# yfinance — stub so unit tests have zero network requirements
+_fake_yf = types.ModuleType("yfinance")
+_fake_yf.Ticker = lambda *a, **kw: None
+_fake_yf.download = lambda *a, **kw: pd.DataFrame()
+sys.modules.setdefault("yfinance", _fake_yf)
+
+# requests
+_fake_req = types.ModuleType("requests")
+_fake_req.get  = lambda *a, **kw: None
+_fake_req.post = lambda *a, **kw: None
+sys.modules.setdefault("requests", _fake_req)
+
 # scipy is used by middleware.local_min_max — provide a real-ish stub if absent
 try:
     from scipy.signal import argrelextrema

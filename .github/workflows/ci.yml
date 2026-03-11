@@ -18,15 +18,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5.4.0
         with:
           python-version: "3.11"
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-test.txt
 
       - name: Run unit tests
         run: |
@@ -34,7 +34,7 @@ jobs:
             --cov=app --cov-report=xml:coverage.xml
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           file: coverage.xml
         continue-on-error: true
@@ -48,12 +48,12 @@ jobs:
     needs: unit-tests
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-python@v5.4.0
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r requirements.txt
+      - run: pip install -r requirements-test.txt
       - run: pytest tests/test_integration.py -v --tb=short
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -79,12 +79,12 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-python@v5.4.0
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r requirements.txt
+      - run: pip install -r requirements-test.txt
       - name: Init schema and run tests
         env:
           DATABASE_URL: postgresql://vestis:ci_throwaway_password@localhost:5432/vestis_test
@@ -101,12 +101,12 @@ jobs:
     needs: [integration-sqlite, integration-postgres]
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-python@v5.4.0
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r requirements.txt
+      - run: pip install -r requirements-test.txt
       - run: pytest tests/test_smoke.py -v --tb=short
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -119,7 +119,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
       - name: Build image
         run: docker build -t vestis:${{ github.sha }} .
       - name: Verify image
