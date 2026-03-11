@@ -124,7 +124,7 @@ Vestis uses two configuration mechanisms:
 | `TELEGRAM_BOT_TOKEN` | | *(empty)* | Enables Telegram notifications |
 | `TELEGRAM_CHAT_ID` | | *(empty)* | Your Telegram chat / group ID |
 
-### App settings — `config.json` (safe to commit — no secrets)
+### App settings — `config.json`
 
 Configure in the dashboard under **⚙️ Settings**, or edit `config.json` directly:
 
