@@ -1,0 +1,8 @@
+# telegram_worker crontab  (supercronic format)
+#
+# Immediate alerts  – check every 5 minutes on trading days
+# Digest alerts     – send once a day at 19:00 UTC
+#
+# min   hour  day  month  weekday   command
+  */5   *     *    *      1-5       python /app/telegram_worker.py --mode immediate
+   0    19    *    *      1-5       python /app/telegram_worker.py --mode digest

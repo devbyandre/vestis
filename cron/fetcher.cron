@@ -1,0 +1,8 @@
+# data_fetcher crontab  (supercronic format – same as standard cron)
+#
+# Fetch prices + KPIs every trading day at 18:30 CET (17:30 UTC) – after market close
+# Also run a quick refresh at 09:00 UTC for pre-market data
+#
+# min  hour  day  month  weekday   command
+  30   17    *    *      1-5       python /app/data_fetcher.py --mode full
+   0    9    *    *      1-5       python /app/data_fetcher.py --mode prices

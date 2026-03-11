@@ -1,0 +1,119 @@
+services:
+
+  # ─────────────────────────────────────────
+  # PostgreSQL database
+  # ─────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: stockapp-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-stockapp}
+      POSTGRES_USER: ${POSTGRES_USER:-stockapp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?err}   # required – set in .env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stockapp}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────
+  # DB init (runs once, then exits)
+  # ─────────────────────────────────────────
+  db-init:
+    build: .
+    container_name: stockapp-db-init
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-stockapp}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-stockapp}
+    command: python setup/db_init.py
+
+  # ─────────────────────────────────────────
+  # Streamlit dashboard
+  # ─────────────────────────────────────────
+  app:
+    build: .
+    container_name: stockapp-ui
+    restart: unless-stopped
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    ports:
+      - "${APP_PORT:-8501}:8501"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-stockapp}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-stockapp}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - ./config.json:/app/config.json:ro   # mount your config (optional)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ─────────────────────────────────────────
+  # data_fetcher – runs on a schedule via supercronic
+  # ─────────────────────────────────────────
+  data-fetcher:
+    build: .
+    container_name: stockapp-fetcher
+    restart: unless-stopped
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-stockapp}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-stockapp}
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./cron/fetcher.cron:/etc/supercronic/crontab:ro
+    command: supercronic /etc/supercronic/crontab
+
+  # ─────────────────────────────────────────
+  # telegram_worker – runs on a schedule via supercronic
+  # ─────────────────────────────────────────
+  telegram-worker:
+    build: .
+    container_name: stockapp-telegram
+    restart: unless-stopped
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-stockapp}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-stockapp}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./cron/telegram.cron:/etc/supercronic/crontab:ro
+    command: supercronic /etc/supercronic/crontab
+
+volumes:
+  pgdata:
+
+  # ─────────────────────────────────────────
+  # Auto-deploy webhook (optional)
+  # Receives push events from GitHub and runs git pull + docker compose up
+  # Add WEBHOOK_SECRET to your .env to enable
+  # ─────────────────────────────────────────
+  webhook:
+    build: .
+    container_name: vestis-webhook
+    restart: unless-stopped
+    profiles: ["webhook"]          # opt-in: docker compose --profile webhook up -d
+    ports:
+      - "${WEBHOOK_PORT:-9000}:9000"
+    environment:
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+      WEBHOOK_PORT: "9000"
+      PROJECT_DIR: /opt/vestis
+      DEPLOY_BRANCH: refs/heads/main
+    volumes:
+      - /opt/vestis:/opt/vestis    # mount your project root
+      - /var/run/docker.sock:/var/run/docker.sock  # so it can run docker compose
+    command: python scripts/webhook_server.py
