@@ -30,7 +30,7 @@ jobs:
 
       - name: Run unit tests
         run: |
-          pytest tests/test_unit.py -v --tb=short \
+          PYTHONPATH=app pytest tests/test_unit.py -v --tb=short \
             --cov=app --cov-report=xml:coverage.xml
 
       - name: Upload coverage
@@ -89,7 +89,7 @@ jobs:
         env:
           DATABASE_URL: postgresql://vestis:ci_throwaway_password@localhost:5432/vestis_test
         run: |
-          python app/setup/db_init.py
+          PYTHONPATH=app python app/setup/db_init.py
           pytest tests/test_integration.py -v --tb=short
 
   # ──────────────────────────────────────────────────────────────────────────
