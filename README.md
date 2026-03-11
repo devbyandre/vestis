@@ -265,7 +265,7 @@ For larger changes, please open an issue first to discuss the approach.
 
 ## 📄 License
 
-MIT © [YOUR_USERNAME](https://github.com/YOUR_USERNAME) — see [LICENSE](LICENSE) for details.
+MIT © [DevByAndre](https://github.com/YOUR_USERNAME) — see [LICENSE](LICENSE) for details.
 
 ---
 
