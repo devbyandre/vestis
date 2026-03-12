@@ -265,7 +265,7 @@ For larger changes, please open an issue first to discuss the approach.
 
 ## 📄 License
 
-MIT © [DevByAndre](https://github.com/YOUR_USERNAME) — see [LICENSE](LICENSE) for details.
+GNU GPL © [DevByAndre](https://github.com/YOUR_USERNAME) — see [LICENSE](LICENSE) for details.
 
 ---
 
