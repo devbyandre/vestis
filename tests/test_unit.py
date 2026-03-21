@@ -566,11 +566,11 @@ class TestCalcDividends:
         tx_df = pd.DataFrame(tx_rows)
         monkeypatch.setattr(mw, "list_transactions", lambda pids=None: tx_df)
 
-        import db_utils as _db  # the stub
+        # Patch get_dividends on the db module that middleware has already imported
         def fake_get_dividends(sym):
             rows = div_rows_by_symbol.get(sym, [])
             return pd.DataFrame(rows)
-        monkeypatch.setattr(_db, "get_dividends", fake_get_dividends)
+        monkeypatch.setattr(mw.db, "get_dividends", fake_get_dividends)
 
     def test_dividend_attributed_correctly(self, monkeypatch):
         self._setup(monkeypatch,

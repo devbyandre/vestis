@@ -1117,221 +1117,223 @@ with tabs[2]:
 
     # --- Charts: always filtered by portfolio selection AND "current holdings only" toggle ---
     with st.expander("Portfolio Analytics Over Time"):
-    
-        st.subheader("Portfolio Analytics Over Time")
+        if holdings_snapshot.empty:
+            st.info("No holdings available.")
+        else:
+            st.subheader("Portfolio Analytics Over Time")
 
-        portfolio_ids = selected_ids if selected_ports else None
+            portfolio_ids = selected_ids if selected_ports else None
 
-        # Get the symbols to include (current holdings only if checkbox selected)
-        symbols_to_include = df_filtered['symbol'].unique() if show_current_only else None
+            # Get the symbols to include (current holdings only if checkbox selected)
+            symbols_to_include = df_filtered['symbol'].unique() if show_current_only else None
 
-        # Fetch holdings timeseries
-        df_timeseries = mw.holdings_timeseries(portfolio_ids=portfolio_ids, aggregate=False)
+            # Fetch holdings timeseries
+            df_timeseries = mw.holdings_timeseries(portfolio_ids=portfolio_ids, aggregate=False)
 
-        # Filter timeseries to selected symbols (if applicable)
-        if symbols_to_include is not None and len(symbols_to_include) > 0:
-            df_timeseries = df_timeseries[df_timeseries['symbol'].isin(symbols_to_include)]
+            # Filter timeseries to selected symbols (if applicable)
+            if symbols_to_include is not None and len(symbols_to_include) > 0:
+                df_timeseries = df_timeseries[df_timeseries['symbol'].isin(symbols_to_include)]
 
-        if not df_timeseries.empty:
-            # --- Asset Allocation Over Time (by security_type) ---
-            type_map = {"EQUITY": "Equity", "ETF": "ETF", "BONDS": "Bonds", "CRYPTOCURRENCY": "Crypto"}
-            df_timeseries['security_type'] = df_timeseries['security_type'].map(type_map).fillna("Other")
+            if not df_timeseries.empty:
+                # --- Asset Allocation Over Time (by security_type) ---
+                type_map = {"EQUITY": "Equity", "ETF": "ETF", "BONDS": "Bonds", "CRYPTOCURRENCY": "Crypto"}
+                df_timeseries['security_type'] = df_timeseries['security_type'].map(type_map).fillna("Other")
 
-            df_grouped = df_timeseries.pivot_table(
-                index='date', columns='security_type', values='market_value', aggfunc='sum'
-            ).fillna(0.0)
+                df_grouped = df_timeseries.pivot_table(
+                    index='date', columns='security_type', values='market_value', aggfunc='sum'
+                ).fillna(0.0)
 
-            # ensure all expected asset types exist
-            asset_types = ["Equity", "ETF", "Bonds"]
-            for t in asset_types:
-                if t not in df_grouped.columns:
-                    df_grouped[t] = 0.0
-            df_grouped = df_grouped[asset_types].reset_index()
+                # ensure all expected asset types exist
+                asset_types = ["Equity", "ETF", "Bonds"]
+                for t in asset_types:
+                    if t not in df_grouped.columns:
+                        df_grouped[t] = 0.0
+                df_grouped = df_grouped[asset_types].reset_index()
 
-            # --- Area Chart: Allocation Over Time ---
-            if not df_grouped.empty:
-                fig_alloc = px.area(
-                    df_grouped, x='date', y=asset_types,
-                    title="Portfolio Allocation Over Time (by Asset Type)",
-                    groupnorm="fraction"
-                )
-                st.plotly_chart(fig_alloc, use_container_width=True)
+                # --- Area Chart: Allocation Over Time ---
+                if not df_grouped.empty:
+                    fig_alloc = px.area(
+                        df_grouped, x='date', y=asset_types,
+                        title="Portfolio Allocation Over Time (by Asset Type)",
+                        groupnorm="fraction"
+                    )
+                    st.plotly_chart(fig_alloc, use_container_width=True)
 
-            # --- Asset Allocation Comparison (Actual vs Pre/Post Targets) ---
-            df_alloc = df_timeseries.groupby('security_type')['market_value'].sum()
-            if df_alloc.sum() > 0:
-                df_alloc = df_alloc / df_alloc.sum()
-                df_alloc = df_alloc.to_dict()
-            else:
-                df_alloc = {}
-
-            # Pre- and post-retirement targets
-            target_pre = asset_targets.get("pre_retirement", {}) if asset_targets else {}
-            target_post = asset_targets.get("post_retirement", {}) if asset_targets else {}
-            all_assets = sorted(set(df_alloc.keys()) | set(target_pre.keys()) | set(target_post.keys()))
-
-            compare_rows = []
-            for a in all_assets:
-                actual = df_alloc.get(a, 0.0)
-                compare_rows.append({"Category": a, "Type": "Actual", "Weight": actual, "Delta": 0.0})
-                if a in target_pre:
-                    delta = actual - target_pre[a]
-                    compare_rows.append({"Category": a, "Type": "Target (Pre)", "Weight": target_pre[a], "Delta": delta})
-                if a in target_post:
-                    delta = actual - target_post[a]
-                    compare_rows.append({"Category": a, "Type": "Target (Post)", "Weight": target_post[a], "Delta": delta})
-
-            df_compare_asset = pd.DataFrame(compare_rows)
-
-            if not df_compare_asset.empty:
-                fig_alloc_compare = px.bar(
-                    df_compare_asset, x="Category", y="Weight", color="Type",
-                    barmode="group", title="Asset Allocation: Actual vs Targets",
-                    text=df_compare_asset.apply(lambda row: f"{row['Delta']*100:+.1f}%" if row['Type'] != "Actual" else "", axis=1)
-                )
-                fig_alloc_compare.update_traces(textposition='outside')
-                fig_alloc_compare.update_layout(xaxis_title="Asset Type", yaxis_title="Weight")
-                st.plotly_chart(fig_alloc_compare, use_container_width=True)
-
-            # --- Sector Distribution Over Time ---
-            df_sector = df_timeseries.pivot_table(
-                index='date', columns='sector', values='market_value', aggfunc='sum'
-            ).fillna(0.0).reset_index()
-
-            if len(df_sector.columns) > 1:
-                fig_sector = px.area(
-                    df_sector, x='date', y=df_sector.columns[1:],
-                    title="Sector Allocation Over Time", groupnorm="fraction"
-                )
-                st.plotly_chart(fig_sector, use_container_width=True)
-
-                # --- Sector Comparison ---
-                df_sector_alloc = df_timeseries.groupby("sector")["market_value"].sum()
-                if df_sector_alloc.sum() > 0:
-                    df_sector_alloc = (df_sector_alloc / df_sector_alloc.sum()).to_dict()
+                # --- Asset Allocation Comparison (Actual vs Pre/Post Targets) ---
+                df_alloc = df_timeseries.groupby('security_type')['market_value'].sum()
+                if df_alloc.sum() > 0:
+                    df_alloc = df_alloc / df_alloc.sum()
+                    df_alloc = df_alloc.to_dict()
                 else:
-                    df_sector_alloc = {}
+                    df_alloc = {}
 
-                target_sector_alloc = sectors_config or {}
-                all_sectors = sorted(set(df_sector_alloc.keys()) | set(target_sector_alloc.keys()))
+                # Pre- and post-retirement targets
+                target_pre = asset_targets.get("pre_retirement", {}) if asset_targets else {}
+                target_post = asset_targets.get("post_retirement", {}) if asset_targets else {}
+                all_assets = sorted(set(df_alloc.keys()) | set(target_pre.keys()) | set(target_post.keys()))
 
-                compare_rows, delta_rows = [], []
-                for s in all_sectors:
-                    actual = df_sector_alloc.get(s, 0.0)
-                    compare_rows.append({"Category": s, "Type": "Actual", "Weight": actual})
-                    if s in target_sector_alloc:
-                        compare_rows.append({"Category": s, "Type": "Target", "Weight": target_sector_alloc[s]})
-                        delta_rows.append({"Category": s, "Delta (%)": (actual - target_sector_alloc[s]) * 100})
+                compare_rows = []
+                for a in all_assets:
+                    actual = df_alloc.get(a, 0.0)
+                    compare_rows.append({"Category": a, "Type": "Actual", "Weight": actual, "Delta": 0.0})
+                    if a in target_pre:
+                        delta = actual - target_pre[a]
+                        compare_rows.append({"Category": a, "Type": "Target (Pre)", "Weight": target_pre[a], "Delta": delta})
+                    if a in target_post:
+                        delta = actual - target_post[a]
+                        compare_rows.append({"Category": a, "Type": "Target (Post)", "Weight": target_post[a], "Delta": delta})
 
-                df_compare_sector = pd.DataFrame(compare_rows)
-                if not df_compare_sector.empty:
-                    fig_sector_compare = px.bar(
-                        df_compare_sector, x="Category", y="Weight", color="Type",
-                        barmode="group", title="Sector Allocation: Actual vs Target"
+                df_compare_asset = pd.DataFrame(compare_rows)
+
+                if not df_compare_asset.empty:
+                    fig_alloc_compare = px.bar(
+                        df_compare_asset, x="Category", y="Weight", color="Type",
+                        barmode="group", title="Asset Allocation: Actual vs Targets",
+                        text=df_compare_asset.apply(lambda row: f"{row['Delta']*100:+.1f}%" if row['Type'] != "Actual" else "", axis=1)
                     )
-                    for row in delta_rows:
-                        fig_sector_compare.add_annotation(
-                            x=row["Category"],
-                            y=df_compare_sector[df_compare_sector["Category"] == row["Category"]]["Weight"].max(),
-                            text=f"{row['Delta (%)']:+.1f}%",
-                            showarrow=False, yshift=10
+                    fig_alloc_compare.update_traces(textposition='outside')
+                    fig_alloc_compare.update_layout(xaxis_title="Asset Type", yaxis_title="Weight")
+                    st.plotly_chart(fig_alloc_compare, use_container_width=True)
+
+                # --- Sector Distribution Over Time ---
+                df_sector = df_timeseries.pivot_table(
+                    index='date', columns='sector', values='market_value', aggfunc='sum'
+                ).fillna(0.0).reset_index()
+
+                if len(df_sector.columns) > 1:
+                    fig_sector = px.area(
+                        df_sector, x='date', y=df_sector.columns[1:],
+                        title="Sector Allocation Over Time", groupnorm="fraction"
+                    )
+                    st.plotly_chart(fig_sector, use_container_width=True)
+
+                    # --- Sector Comparison ---
+                    df_sector_alloc = df_timeseries.groupby("sector")["market_value"].sum()
+                    if df_sector_alloc.sum() > 0:
+                        df_sector_alloc = (df_sector_alloc / df_sector_alloc.sum()).to_dict()
+                    else:
+                        df_sector_alloc = {}
+
+                    target_sector_alloc = sectors_config or {}
+                    all_sectors = sorted(set(df_sector_alloc.keys()) | set(target_sector_alloc.keys()))
+
+                    compare_rows, delta_rows = [], []
+                    for s in all_sectors:
+                        actual = df_sector_alloc.get(s, 0.0)
+                        compare_rows.append({"Category": s, "Type": "Actual", "Weight": actual})
+                        if s in target_sector_alloc:
+                            compare_rows.append({"Category": s, "Type": "Target", "Weight": target_sector_alloc[s]})
+                            delta_rows.append({"Category": s, "Delta (%)": (actual - target_sector_alloc[s]) * 100})
+
+                    df_compare_sector = pd.DataFrame(compare_rows)
+                    if not df_compare_sector.empty:
+                        fig_sector_compare = px.bar(
+                            df_compare_sector, x="Category", y="Weight", color="Type",
+                            barmode="group", title="Sector Allocation: Actual vs Target"
                         )
-                    fig_sector_compare.update_layout(xaxis_title="Sector", yaxis_title="Weight")
-                    st.plotly_chart(fig_sector_compare, use_container_width=True)
+                        for row in delta_rows:
+                            fig_sector_compare.add_annotation(
+                                x=row["Category"],
+                                y=df_compare_sector[df_compare_sector["Category"] == row["Category"]]["Weight"].max(),
+                                text=f"{row['Delta (%)']:+.1f}%",
+                                showarrow=False, yshift=10
+                            )
+                        fig_sector_compare.update_layout(xaxis_title="Sector", yaxis_title="Weight")
+                        st.plotly_chart(fig_sector_compare, use_container_width=True)
 
-            # --- Industry Distribution Over Time ---
-            df_ind = df_timeseries.pivot_table(
-                index='date', columns='industry', values='market_value', aggfunc='sum'
-            ).fillna(0.0).reset_index()
+                # --- Industry Distribution Over Time ---
+                df_ind = df_timeseries.pivot_table(
+                    index='date', columns='industry', values='market_value', aggfunc='sum'
+                ).fillna(0.0).reset_index()
 
-            if len(df_ind.columns) > 1:
-                fig_ind = px.area(
-                    df_ind, x='date', y=df_ind.columns[1:],
-                    title="Industry Allocation Over Time", groupnorm="fraction"
-                )
-                st.plotly_chart(fig_ind, use_container_width=True)
-
-                # --- Industry Comparison ---
-                df_ind_alloc = df_timeseries.groupby("industry")["market_value"].sum()
-                if df_ind_alloc.sum() > 0:
-                    df_ind_alloc = (df_ind_alloc / df_ind_alloc.sum()).to_dict()
-                else:
-                    df_ind_alloc = {}
-
-                target_industry_alloc = industries_config or {}
-                all_inds = sorted(set(df_ind_alloc.keys()) | set(target_industry_alloc.keys()))
-
-                compare_rows, delta_rows = [], []
-                for i in all_inds:
-                    actual = df_ind_alloc.get(i, 0.0)
-                    compare_rows.append({"Category": i, "Type": "Actual", "Weight": actual})
-                    if i in target_industry_alloc:
-                        target = target_industry_alloc[i]
-                        compare_rows.append({"Category": i, "Type": "Target", "Weight": target})
-                        delta_rows.append({"Category": i, "Delta (%)": (actual - target) * 100})
-
-                df_compare_ind = pd.DataFrame(compare_rows)
-                if not df_compare_ind.empty:
-                    fig_ind_compare = px.bar(
-                        df_compare_ind, x="Category", y="Weight", color="Type",
-                        barmode="group", title="Industry Allocation: Actual vs Target"
+                if len(df_ind.columns) > 1:
+                    fig_ind = px.area(
+                        df_ind, x='date', y=df_ind.columns[1:],
+                        title="Industry Allocation Over Time", groupnorm="fraction"
                     )
-                    for row in delta_rows:
-                        fig_ind_compare.add_annotation(
-                            x=row["Category"],
-                            y=df_compare_ind[df_compare_ind["Category"] == row["Category"]]["Weight"].max(),
-                            text=f"{row['Delta (%)']:+.1f}%",
-                            showarrow=False, yshift=10
+                    st.plotly_chart(fig_ind, use_container_width=True)
+
+                    # --- Industry Comparison ---
+                    df_ind_alloc = df_timeseries.groupby("industry")["market_value"].sum()
+                    if df_ind_alloc.sum() > 0:
+                        df_ind_alloc = (df_ind_alloc / df_ind_alloc.sum()).to_dict()
+                    else:
+                        df_ind_alloc = {}
+
+                    target_industry_alloc = industries_config or {}
+                    all_inds = sorted(set(df_ind_alloc.keys()) | set(target_industry_alloc.keys()))
+
+                    compare_rows, delta_rows = [], []
+                    for i in all_inds:
+                        actual = df_ind_alloc.get(i, 0.0)
+                        compare_rows.append({"Category": i, "Type": "Actual", "Weight": actual})
+                        if i in target_industry_alloc:
+                            target = target_industry_alloc[i]
+                            compare_rows.append({"Category": i, "Type": "Target", "Weight": target})
+                            delta_rows.append({"Category": i, "Delta (%)": (actual - target) * 100})
+
+                    df_compare_ind = pd.DataFrame(compare_rows)
+                    if not df_compare_ind.empty:
+                        fig_ind_compare = px.bar(
+                            df_compare_ind, x="Category", y="Weight", color="Type",
+                            barmode="group", title="Industry Allocation: Actual vs Target"
                         )
-                    fig_ind_compare.update_layout(xaxis_title="Industry", yaxis_title="Weight")
-                    st.plotly_chart(fig_ind_compare, use_container_width=True)
+                        for row in delta_rows:
+                            fig_ind_compare.add_annotation(
+                                x=row["Category"],
+                                y=df_compare_ind[df_compare_ind["Category"] == row["Category"]]["Weight"].max(),
+                                text=f"{row['Delta (%)']:+.1f}%",
+                                showarrow=False, yshift=10
+                            )
+                        fig_ind_compare.update_layout(xaxis_title="Industry", yaxis_title="Weight")
+                        st.plotly_chart(fig_ind_compare, use_container_width=True)
 
-            # --- Top 10 Securities Over Time ---
-            top_secs = (
-                df_timeseries.groupby('symbol')['market_value']
-                .sum()
-                .sort_values(ascending=False)
-                .head(10)
-                .index
-                .tolist()
-            )
-            df_top = df_timeseries[df_timeseries['symbol'].isin(top_secs)]
-            df_top_grouped = df_top.pivot_table(
-                index='date', columns='symbol', values='market_value', aggfunc='sum'
-            ).fillna(0.0).reset_index()
-
-            label_map = {col: format_sec_label(col) for col in df_top_grouped.columns if col != 'date'}
-            df_top_grouped = df_top_grouped.rename(columns=label_map)
-
-            if len(df_top_grouped.columns) > 1:
-                fig_top = px.area(
-                    df_top_grouped, x='date', y=df_top_grouped.columns[1:],
-                    title="Top 10 Securities Over Time", groupnorm="fraction"
+                # --- Top 10 Securities Over Time ---
+                top_secs = (
+                    df_timeseries.groupby('symbol')['market_value']
+                    .sum()
+                    .sort_values(ascending=False)
+                    .head(10)
+                    .index
+                    .tolist()
                 )
-                fig_top.update_layout(legend_title="Security", legend=dict(itemsizing='constant'))
-                st.plotly_chart(fig_top, use_container_width=True)
+                df_top = df_timeseries[df_timeseries['symbol'].isin(top_secs)]
+                df_top_grouped = df_top.pivot_table(
+                    index='date', columns='symbol', values='market_value', aggfunc='sum'
+                ).fillna(0.0).reset_index()
 
-                # --- Top 10 Securities Comparison (Actual only) with labels ---
-                df_sec_alloc = df_top.groupby("symbol")["market_value"].sum()
-                if df_sec_alloc.sum() > 0:
-                    df_sec_alloc = (df_sec_alloc / df_sec_alloc.sum()).reset_index()
-                    df_sec_alloc.columns = ["Category", "Weight"]
-                    df_sec_alloc["Category"] = df_sec_alloc["Category"].apply(format_sec_label)
+                label_map = {col: format_sec_label(col) for col in df_top_grouped.columns if col != 'date'}
+                df_top_grouped = df_top_grouped.rename(columns=label_map)
 
-                    fig_sec_compare = px.bar(
-                        df_sec_alloc, x="Category", y="Weight", color="Category",
-                        title="Top 10 Securities Allocation (Actual)"
+                if len(df_top_grouped.columns) > 1:
+                    fig_top = px.area(
+                        df_top_grouped, x='date', y=df_top_grouped.columns[1:],
+                        title="Top 10 Securities Over Time", groupnorm="fraction"
                     )
-                    fig_sec_compare.update_traces(
-                        text=df_sec_alloc["Weight"].apply(lambda x: f"{x:.1%}"),
-                        textposition="outside"
-                    )
-                    fig_sec_compare.update_layout(
-                        showlegend=False,
-                        xaxis_title="Security", yaxis_title="Weight",
-                        xaxis=dict(showticklabels=True)
-                    )
-                    st.plotly_chart(fig_sec_compare, use_container_width=True)
+                    fig_top.update_layout(legend_title="Security", legend=dict(itemsizing='constant'))
+                    st.plotly_chart(fig_top, use_container_width=True)
+
+                    # --- Top 10 Securities Comparison (Actual only) with labels ---
+                    df_sec_alloc = df_top.groupby("symbol")["market_value"].sum()
+                    if df_sec_alloc.sum() > 0:
+                        df_sec_alloc = (df_sec_alloc / df_sec_alloc.sum()).reset_index()
+                        df_sec_alloc.columns = ["Category", "Weight"]
+                        df_sec_alloc["Category"] = df_sec_alloc["Category"].apply(format_sec_label)
+
+                        fig_sec_compare = px.bar(
+                            df_sec_alloc, x="Category", y="Weight", color="Category",
+                            title="Top 10 Securities Allocation (Actual)"
+                        )
+                        fig_sec_compare.update_traces(
+                            text=df_sec_alloc["Weight"].apply(lambda x: f"{x:.1%}"),
+                            textposition="outside"
+                        )
+                        fig_sec_compare.update_layout(
+                            showlegend=False,
+                            xaxis_title="Security", yaxis_title="Weight",
+                            xaxis=dict(showticklabels=True)
+                        )
+                        st.plotly_chart(fig_sec_compare, use_container_width=True)
 
     with st.expander("Risk Evolution vs Targets"):
     
@@ -1502,6 +1504,7 @@ with tabs[2]:
 
 
     # --- Fetch rebalancing suggestions ---
+    retirement_year   = get_config("retirement_year") or 2047
     rebalance = mw.suggest_rebalancing(portfolio_ids=selected_ids, retirement_year=retirement_year)
 
     if rebalance.get("suggestions"):
@@ -2975,9 +2978,12 @@ with tabs[7]:
         symbol_labels = [format_sec_label(sym) for sym in symbols]
 
         # 3️⃣ Symbol & alert type
-        a_symbol_label = st.selectbox("Security (name / symbol)", options=symbol_labels)
-        # Extract symbol from label
-        a_symbol = a_symbol_label.split("(")[-1].replace(")","").strip()  
+        if not symbol_labels:
+            st.info("No securities found. Add securities to your watchlist or portfolio first.")
+            a_symbol = None
+        else:
+            a_symbol_label = st.selectbox("Security (name / symbol)", options=symbol_labels)
+            a_symbol = a_symbol_label.split("(")[-1].replace(")", "").strip() if a_symbol_label else None
 
         a_type = st.selectbox(
             "Alert type",
@@ -3055,21 +3061,24 @@ with tabs[7]:
 
             submitted = st.form_submit_button("Create alert")
             if submitted:
-                sec = mw.get_security(a_symbol)
-                if not sec:
-                    st.error(f"Symbol {a_symbol} not found")
+                if not a_symbol:
+                    st.error("No security selected — add securities to your watchlist or portfolio first.")
                 else:
-                    sec_id = sec["id"]
-                    mw.create_alert(
-                        security_id=sec_id,
-                        alert_type=a_type,
-                        params=params,
-                        notify_mode=a_notify,
-                        cooldown_seconds=int(a_cool),
-                        note=a_note
-                    )
-                    st.success("✅ Alert created")
-                    st.rerun()
+                    sec = mw.get_security(a_symbol)
+                    if not sec:
+                        st.error(f"Symbol {a_symbol} not found")
+                    else:
+                        sec_id = sec["id"]
+                        mw.create_alert(
+                            security_id=sec_id,
+                            alert_type=a_type,
+                            params=params,
+                            notify_mode=a_notify,
+                            cooldown_seconds=int(a_cool),
+                            note=a_note
+                        )
+                        st.success("✅ Alert created")
+                        st.rerun()
 
 
 # ---------- SETTINGS ----------
