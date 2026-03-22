@@ -242,7 +242,7 @@ def list_securities() -> pd.DataFrame:
     return _read_sql("""
         SELECT s.id,
                s.yahoo_ticker AS symbol,
-               COALESCE(sc."longName", sc."shortName") AS name,
+               COALESCE(sc.longname, sc.shortname) AS name,
                s.isin
         FROM securities s
         LEFT JOIN securities_cache sc ON sc.security_id = s.id
@@ -292,7 +292,7 @@ def list_securities_metadata() -> pd.DataFrame:
     return _read_sql("""
         SELECT s.id,
                s.yahoo_ticker AS symbol,
-               sc."longName" AS name,
+               sc.longname AS name,
                sc.security_type,
                sc.sector,
                sc.industry,
@@ -310,7 +310,7 @@ def update_security(sec_id: int, name: Optional[str] = None, isin: Optional[str]
             cur.execute(_adapt_sql("UPDATE securities SET isin=? WHERE id=?"), (isin, sec_id))
         if name is not None:
             cur.execute(
-                _adapt_sql("""UPDATE securities_cache SET "longName"=? WHERE security_id=?"""),
+                _adapt_sql("""UPDATE securities_cache SET longname=? WHERE security_id=?"""),
                 (name, sec_id),
             )
         conn.commit()
@@ -324,21 +324,21 @@ def store_security_cache(security_id: int, info: dict) -> None:
     security_type = info.get("quoteType")
 
     keys = [
-        "country", "exchange", "sector", "industry", "shortName", "longName",
-        "regularMarketPrice", "fiftyTwoWeekHigh", "fiftyTwoWeekLow", "volume", "averageVolume",
-        "marketCap", "beta", "trailingPE", "forwardPE", "trailingEps", "earningsTimestamp",
-        "dividendRate", "dividendYield", "enterpriseValue", "profitMargins", "operatingMargins",
-        "returnOnAssets", "returnOnEquity", "totalRevenue", "revenuePerShare", "grossProfits",
-        "ebitda", "totalCash", "totalDebt", "currentRatio", "bookValue", "operatingCashflow",
-        "freeCashflow", "sharesOutstanding", "currency",
+        "country", "exchange", "sector", "industry", shortname, longname,
+        regularmarketprice, fiftytwoweekhigh, fiftytwoweeklow, "volume", averagevolume,
+        marketcap, "beta", trailingpe, forwardpe, trailingeps, earningstimestamp,
+        dividendrate, dividendyield, enterprisevalue, profitmargins, operatingmargins,
+        returnonassets, returnonequity, totalrevenue, revenuepershare, grossprofits,
+        "ebitda", totalcash, totaldebt, currentratio, bookvalue, operatingcashflow,
+        freecashflow, sharesoutstanding, "currency",
     ]
     numeric_keys = [
-        "regularMarketPrice", "fiftyTwoWeekHigh", "fiftyTwoWeekLow", "volume", "averageVolume",
-        "marketCap", "beta", "trailingPE", "forwardPE", "trailingEps", "dividendRate",
-        "dividendYield", "enterpriseValue", "profitMargins", "operatingMargins",
-        "returnOnAssets", "returnOnEquity", "totalRevenue", "revenuePerShare", "grossProfits",
-        "ebitda", "totalCash", "totalDebt", "currentRatio", "bookValue",
-        "operatingCashflow", "freeCashflow", "sharesOutstanding",
+        regularmarketprice, fiftytwoweekhigh, fiftytwoweeklow, "volume", averagevolume,
+        marketcap, "beta", trailingpe, forwardpe, trailingeps, dividendrate,
+        dividendyield, enterprisevalue, profitmargins, operatingmargins,
+        returnonassets, returnonequity, totalrevenue, revenuepershare, grossprofits,
+        "ebitda", totalcash, totaldebt, currentratio, bookvalue,
+        operatingcashflow, freecashflow, sharesoutstanding,
     ]
 
     data_values = []
@@ -355,7 +355,7 @@ def store_security_cache(security_id: int, info: dict) -> None:
     cols = ["security_id", "security_type"] + keys + ["kpis_updated_at"]
     data = [security_id, security_type] + data_values + [ts_now]
 
-    # quoted column names for reserved words (e.g. "longName")
+    # quoted column names for reserved words (e.g. longname)
     quoted_cols = [f'"{c}"' if c[0].islower() and c != "security_id" and c != "security_type"
                    else c for c in cols]
 
@@ -364,7 +364,7 @@ def store_security_cache(security_id: int, info: dict) -> None:
     update_cols = [c for c in cols if c not in ("security_id",)]
     update_set = ",\n".join([
         f'"{c}" = EXCLUDED."{c}"'
-        if c not in ("shortName", "longName")
+        if c not in (shortname, longname)
         else f'"{c}" = COALESCE(securities_cache."{c}", EXCLUDED."{c}")'
         for c in update_cols
     ])
@@ -398,7 +398,7 @@ def store_lazy_security(security_id: int, data: dict) -> None:
         sql = _adapt_sql("""
             INSERT INTO securities_cache (
                 security_id, security_type, country, exchange, sector, industry,
-                "shortName", "longName", "regularMarketPrice"
+                shortname, longname, regularmarketprice
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (security_id) DO UPDATE SET
@@ -407,9 +407,9 @@ def store_lazy_security(security_id: int, data: dict) -> None:
                 exchange = EXCLUDED.exchange,
                 sector = EXCLUDED.sector,
                 industry = EXCLUDED.industry,
-                "regularMarketPrice" = EXCLUDED."regularMarketPrice",
-                "shortName" = COALESCE(securities_cache."shortName", EXCLUDED."shortName"),
-                "longName"  = COALESCE(securities_cache."longName",  EXCLUDED."longName")
+                regularmarketprice = EXCLUDED.regularmarketprice,
+                shortname = COALESCE(securities_cache.shortname, EXCLUDED.shortname),
+                longname  = COALESCE(securities_cache.longname,  EXCLUDED.longname)
         """)
     else:
         sql = """
@@ -432,7 +432,7 @@ def store_lazy_security(security_id: int, data: dict) -> None:
         conn.cursor().execute(sql, (
             security_id, data.get("security_type"), data.get("country"),
             data.get("exchange"), data.get("sector"), data.get("industry"),
-            data.get("shortName"), data.get("longName"), data.get("regularMarketPrice"),
+            data.get(shortname), data.get(longname), data.get(regularmarketprice),
         ))
         conn.commit()
 
@@ -451,21 +451,21 @@ def get_security_cache(id: int) -> Optional[pd.DataFrame]:
     currency = data.get("currency", "EUR") or "EUR"
 
     kpi_keys = [
-        "security_type", "country", "exchange", "sector", "industry", "shortName", "longName",
-        "regularMarketPrice", "fiftyTwoWeekHigh", "fiftyTwoWeekLow", "volume", "averageVolume",
-        "marketCap", "beta", "trailingPE", "forwardPE", "trailingEps", "earningsTimestamp",
-        "dividendRate", "dividendYield", "enterpriseValue", "profitMargins", "operatingMargins",
-        "returnOnAssets", "returnOnEquity", "totalRevenue", "revenuePerShare", "grossProfits",
-        "ebitda", "totalCash", "totalDebt", "currentRatio", "bookValue",
-        "operatingCashflow", "freeCashflow", "sharesOutstanding",
+        "security_type", "country", "exchange", "sector", "industry", shortname, longname,
+        regularmarketprice, fiftytwoweekhigh, fiftytwoweeklow, "volume", averagevolume,
+        marketcap, "beta", trailingpe, forwardpe, trailingeps, earningstimestamp,
+        dividendrate, dividendyield, enterprisevalue, profitmargins, operatingmargins,
+        returnonassets, returnonequity, totalrevenue, revenuepershare, grossprofits,
+        "ebitda", totalcash, totaldebt, currentratio, bookvalue,
+        operatingcashflow, freecashflow, sharesoutstanding,
     ]
     for k in kpi_keys:
         data.setdefault(k, None)
 
     monetary_fields = [
-        "regularMarketPrice", "fiftyTwoWeekHigh", "fiftyTwoWeekLow", "marketCap", "dividendRate",
-        "enterpriseValue", "totalRevenue", "revenuePerShare", "grossProfits", "ebitda",
-        "totalCash", "totalDebt", "bookValue", "operatingCashflow", "freeCashflow",
+        regularmarketprice, fiftytwoweekhigh, fiftytwoweeklow, marketcap, dividendrate,
+        enterprisevalue, totalrevenue, revenuepershare, grossprofits, "ebitda",
+        totalcash, totaldebt, bookvalue, operatingcashflow, freecashflow,
     ]
     if currency.upper() != "EUR":
         fx_df = _read_sql("""
@@ -525,7 +525,7 @@ def list_transactions(portfolio_ids: Optional[List[int]] = None) -> pd.DataFrame
     base = """
         SELECT t.*, p.name AS portfolio_name,
                s.yahoo_ticker AS symbol,
-               COALESCE(sc."longName", 'N/A') AS name
+               COALESCE(sc.longname, 'N/A') AS name
         FROM transactions t
         LEFT JOIN portfolios p ON p.id = t.portfolio_id
         LEFT JOIN securities s ON s.id = t.security_id
@@ -542,7 +542,7 @@ def list_transactions_detailed() -> pd.DataFrame:
     return _read_sql("""
         SELECT t.id, t.portfolio_id, p.name AS portfolio,
                s.yahoo_ticker AS symbol, s.isin,
-               COALESCE(sc."longName", NULL) AS security_name,
+               COALESCE(sc.longname, NULL) AS security_name,
                t.date AS tx_date, t.type AS tx_type,
                t.quantity, t.price, t.fees AS tx_cost
         FROM transactions t
@@ -619,25 +619,25 @@ def get_transaction_by_id(tx_id: int) -> Optional[dict]:
 
 def get_watchlist() -> pd.DataFrame:
     monetary_fields = [
-        "regularMarketPrice", "fiftyTwoWeekHigh", "fiftyTwoWeekLow",
-        "marketCap", "enterpriseValue", "totalRevenue", "revenuePerShare",
-        "grossProfits", "ebitda", "totalCash", "totalDebt",
-        "operatingCashflow", "freeCashflow", "bookValue", "dividendRate",
+        regularmarketprice, fiftytwoweekhigh, fiftytwoweeklow,
+        marketcap, enterprisevalue, totalrevenue, revenuepershare,
+        grossprofits, "ebitda", totalcash, totaldebt,
+        operatingcashflow, freecashflow, bookvalue, dividendrate,
     ]
     df = _read_sql("""
         SELECT s.id AS security_id, s.yahoo_ticker AS symbol,
-               sc."longName" AS security_name, sc."shortName",
+               sc.longname AS security_name, sc.shortname,
                sc.security_type, sc.country, sc.exchange,
                sc.sector, sc.industry, sc.currency,
-               sc."regularMarketPrice", sc."fiftyTwoWeekHigh", sc."fiftyTwoWeekLow",
-               sc.volume, sc."averageVolume", sc."marketCap", sc.beta,
-               sc."trailingPE", sc."forwardPE", sc."trailingEps" AS eps,
-               sc."earningsTimestamp" AS earnings_date, sc."dividendRate", sc."dividendYield",
-               sc."enterpriseValue", sc."profitMargins", sc."operatingMargins",
-               sc."returnOnAssets", sc."returnOnEquity", sc."totalRevenue",
-               sc."revenuePerShare", sc."grossProfits", sc.ebitda,
-               sc."totalCash", sc."totalDebt", sc."currentRatio", sc."bookValue",
-               sc."operatingCashflow", sc."freeCashflow", sc."sharesOutstanding"
+               sc.regularmarketprice, sc.fiftytwoweekhigh, sc.fiftytwoweeklow,
+               sc.volume, sc.averagevolume, sc.marketcap, sc.beta,
+               sc.trailingpe, sc.forwardpe, sc.trailingeps AS eps,
+               sc.earningstimestamp AS earnings_date, sc.dividendrate, sc.dividendyield,
+               sc.enterprisevalue, sc.profitmargins, sc.operatingmargins,
+               sc.returnonassets, sc.returnonequity, sc.totalrevenue,
+               sc.revenuepershare, sc.grossprofits, sc.ebitda,
+               sc.totalcash, sc.totaldebt, sc.currentratio, sc.bookvalue,
+               sc.operatingcashflow, sc.freecashflow, sc.sharesoutstanding
         FROM securities s
         LEFT JOIN securities_cache sc ON sc.security_id = s.id
         WHERE s.id NOT IN (
@@ -968,7 +968,7 @@ def get_cashflow_payloads(symbol: str) -> pd.DataFrame:
 def get_all_alerts() -> pd.DataFrame:
     return _read_sql("""
         SELECT a.id, a.security_id,
-               COALESCE(sc."longName", sc."shortName") AS security_name,
+               COALESCE(sc.longname, sc.shortname) AS security_name,
                s.yahoo_ticker AS symbol,
                a.alert_type, a.params, a.active, a.notify_mode,
                a.cooldown_seconds, a.last_evaluated, a.last_triggered,
@@ -1101,7 +1101,7 @@ def get_holdings_from_transactions(portfolio_ids: Optional[List[int]] = None) ->
     sql = """
         SELECT DISTINCT p.id AS portfolio_id, p.name AS portfolio_name,
                s.id AS security_id, s.yahoo_ticker AS symbol,
-               sc."longName" AS security_name
+               sc.longname AS security_name
         FROM transactions t
         INNER JOIN portfolios p ON p.id = t.portfolio_id
         INNER JOIN securities s ON s.id = t.security_id
@@ -1174,7 +1174,7 @@ def get_holdings_timeseries(
         SELECT ht.date, ht.portfolio_id, ht.security_id,
                ht.quantity, ht.market_value, ht.cost_basis,
                s.yahoo_ticker AS symbol,
-               COALESCE(sc."longName", s.yahoo_ticker, 'Unknown') AS name,
+               COALESCE(sc.longname, s.yahoo_ticker, 'Unknown') AS name,
                COALESCE(sc.sector,'Unknown') AS sector,
                COALESCE(sc.industry,'Unknown') AS industry,
                COALESCE(sc.exchange,'Unknown') AS exchange,
