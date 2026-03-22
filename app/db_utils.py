@@ -346,6 +346,13 @@ def store_security_cache(security_id: int, info: dict) -> None:
                 v = float(v)
             except (TypeError, ValueError):
                 v = None
+        elif k == "earningsTimestamp":
+            # Yahoo returns Unix timestamp int — convert to ISO string for Postgres
+            try:
+                if v is not None:
+                    v = pd.Timestamp(int(v), unit="s", tz="UTC").isoformat()
+            except (TypeError, ValueError, OSError):
+                v = None
         data_values.append(v)
 
     ts_now = pd.Timestamp.utcnow().isoformat()
