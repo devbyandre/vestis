@@ -353,15 +353,18 @@ def store_security_cache(security_id: int, info: dict) -> None:
             except (TypeError, ValueError, OSError):
                 v = None
         elif v is not None:
-            # Convert any remaining numpy scalar types to native Python
+            # Convert numpy/large int types to safe Python types
             try:
                 import numpy as np
                 if isinstance(v, (np.integer,)):
-                    v = int(v)
+                    v = float(v)  # use float to avoid INTEGER overflow
                 elif isinstance(v, (np.floating,)):
                     v = float(v)
             except ImportError:
                 pass
+            # Also convert plain Python ints that might overflow Postgres INTEGER
+            if isinstance(v, int) and (v > 2147483647 or v < -2147483647):
+                v = float(v)
         data_values.append(v)
 
     ts_now = pd.Timestamp.utcnow().isoformat()
