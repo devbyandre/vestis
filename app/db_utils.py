@@ -779,13 +779,13 @@ def store_prices(security_id: int, df: pd.DataFrame) -> None:
 
     ts = to_iso_ts(pd.Timestamp.utcnow())
     recs = [
-        (security_id, r.date,
-         r.open if pd.notna(r.open) else 0.0,
-         r.high if pd.notna(r.high) else 0.0,
-         r.low if pd.notna(r.low) else 0.0,
-         r.close if pd.notna(r.close) else 0.0,
-         r.adj_close if pd.notna(r.adj_close) else 0.0,
-         r.volume if pd.notna(r.volume) else 0.0,
+        (int(security_id), str(r.date),
+         float(r.open) if pd.notna(r.open) else 0.0,
+         float(r.high) if pd.notna(r.high) else 0.0,
+         float(r.low) if pd.notna(r.low) else 0.0,
+         float(r.close) if pd.notna(r.close) else 0.0,
+         float(r.adj_close) if pd.notna(r.adj_close) else 0.0,
+         float(r.volume) if pd.notna(r.volume) else 0.0,
          ts)
         for r in df.to_records(index=False)
     ]
