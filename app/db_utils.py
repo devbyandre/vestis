@@ -343,16 +343,25 @@ def store_security_cache(security_id: int, info: dict) -> None:
         v = info.get(k)
         if k in numeric_keys:
             try:
-                v = float(v)
+                v = float(v) if v is not None else None
             except (TypeError, ValueError):
                 v = None
         elif k == "earningsTimestamp":
-            # Yahoo returns Unix timestamp int — convert to ISO string for Postgres
             try:
                 if v is not None:
                     v = pd.Timestamp(int(v), unit="s", tz="UTC").isoformat()
             except (TypeError, ValueError, OSError):
                 v = None
+        elif v is not None:
+            # Convert any remaining numpy scalar types to native Python
+            try:
+                import numpy as np
+                if isinstance(v, (np.integer,)):
+                    v = int(v)
+                elif isinstance(v, (np.floating,)):
+                    v = float(v)
+            except ImportError:
+                pass
         data_values.append(v)
 
     ts_now = pd.Timestamp.utcnow().isoformat()
