@@ -1673,7 +1673,7 @@ def get_complete_taxonomy(holdings_df):
     Returns taxonomy dict with Yahoo baseline + any extra sectors/industries found in holdings.
     """
     baseline = get_config("taxonomy")
-if isinstance(baseline, str): baseline = json.loads(baseline)
+    if isinstance(baseline, str): baseline = json.loads(baseline)
     taxonomy = baseline.copy()
 
     for _, row in holdings_df.iterrows():
