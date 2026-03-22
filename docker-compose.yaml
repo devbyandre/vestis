@@ -95,25 +95,3 @@ services:
 
 volumes:
   pgdata:
-
-  # ─────────────────────────────────────────
-  # Auto-deploy webhook (optional)
-  # Receives push events from GitHub and runs git pull + docker compose up
-  # Add WEBHOOK_SECRET to your .env to enable
-  # ─────────────────────────────────────────
-  webhook:
-    build: .
-    container_name: vestis-webhook
-    restart: unless-stopped
-    profiles: ["webhook"]          # opt-in: docker compose --profile webhook up -d
-    ports:
-      - "${WEBHOOK_PORT:-9000}:9000"
-    environment:
-      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
-      WEBHOOK_PORT: "9000"
-      PROJECT_DIR: /opt/vestis
-      DEPLOY_BRANCH: refs/heads/main
-    volumes:
-      - /opt/vestis:/opt/vestis    # mount your project root
-      - /var/run/docker.sock:/var/run/docker.sock  # so it can run docker compose
-    command: python scripts/webhook_server.py
