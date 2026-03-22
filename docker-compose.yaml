@@ -71,7 +71,6 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-stockapp}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-stockapp}
     volumes:
       - ./config.json:/app/config.json:ro
-      - ./cron/fetcher.cron:/etc/supercronic/crontab:ro
     command: supercronic /app/cron/fetcher.cron
 
   # ─────────────────────────────────────────
@@ -90,7 +89,6 @@ services:
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     volumes:
       - ./config.json:/app/config.json:ro
-      - ./cron/telegram.cron:/etc/supercronic/crontab:ro
     command: supercronic /app/cron/telegram.cron
 
 volumes:
