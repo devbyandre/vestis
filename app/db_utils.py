@@ -121,20 +121,18 @@ def _read_sql(sql: str, params=None) -> pd.DataFrame:
     with _engine.connect() as con:
         if params:
             # SQLAlchemy 2.x requires named params as dicts with sa_text.
-            # Convert positional tuple (val1, val2) → [{"p0": val1, "p1": val2}]
-            # and replace ? placeholders with :p0, :p1, ...
-            if not _IS_POSTGRES:
-                named_sql = adapted
-                named_params = {}
-                i = 0
-                while "?" in named_sql:
-                    named_sql = named_sql.replace("?", f":p{i}", 1)
-                    named_params[f"p{i}"] = params[i]
-                    i += 1
-                return pd.read_sql_query(sa_text(named_sql), con, params=named_params)
-            else:
-                return pd.read_sql_query(adapted, con, params=list(params))
-        return pd.read_sql_query(sa_text(adapted) if not _IS_POSTGRES else adapted, con)
+            # Convert positional tuple (val1, val2) → {"p0": val1, "p1": val2}
+            # and replace ? or %s placeholders with :p0, :p1, ...
+            named_sql = adapted
+            named_params = {}
+            i = 0
+            placeholder = "%s" if _IS_POSTGRES else "?"
+            while placeholder in named_sql:
+                named_sql = named_sql.replace(placeholder, f":p{i}", 1)
+                named_params[f"p{i}"] = params[i]
+                i += 1
+            return pd.read_sql_query(sa_text(named_sql), con, params=named_params)
+        return pd.read_sql_query(sa_text(adapted), con)
 
 
 # ── Date helpers ──────────────────────────────────────────────────────────────
