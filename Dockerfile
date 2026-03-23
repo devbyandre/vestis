@@ -6,14 +6,14 @@ RUN printf 'deb https://deb.debian.org/debian bookworm main\ndeb https://deb.deb
     > /etc/apt/sources.list \
     && rm -f /etc/apt/sources.list.d/*
 
-# Install system dependencies + curl (healthcheck) + supercronic (cron replacement)
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc \
         libpq-dev \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install supercronic (lightweight cron for containers – no root daemon needed)
+# Install supercronic
 ARG SUPERCRONIC_VERSION=v0.2.29
 ARG SUPERCRONIC_URL=https://github.com/aptible/supercronic/releases/download/${SUPERCRONIC_VERSION}/supercronic-linux-amd64
 RUN curl -fsSL "$SUPERCRONIC_URL" -o /usr/local/bin/supercronic \
@@ -22,9 +22,9 @@ RUN curl -fsSL "$SUPERCRONIC_URL" -o /usr/local/bin/supercronic \
 # Copy cron schedules into image
 COPY cron/ /app/cron/
 
-# Install Python dependencies
+# Install Python dependencies with extended timeout for large packages
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --timeout=120 -r requirements.txt
 
 # Application code
 COPY app/ .
