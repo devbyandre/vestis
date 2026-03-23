@@ -1,8 +1,13 @@
-# data_fetcher crontab  (supercronic format – same as standard cron)
+# data_fetcher crontab  (supercronic format)
 #
-# Fetch prices + KPIs every trading day at 18:30 CET (17:30 UTC) – after market close
-# Also run a quick refresh at 09:00 UTC for pre-market data
+# Intraday price refresh — every 30 min, Mon-Fri 08:00-23:00 UTC
+# Covers: XETRA (08:00-17:30 UTC), NYSE/NASDAQ (14:30-21:00 UTC)
+# Also catches crypto (runs all hours via the same job)
 #
-# min  hour  day  month  weekday   command
-  30   17    *    *      1-5       python /app/data_fetcher.py --mode full
-   0    9    *    *      1-5       python /app/data_fetcher.py --mode prices
+# Full fetch (prices + fundamentals + dividends) — once daily after US close
+# Also runs Saturday morning to catch any Friday stragglers
+#
+# min  hour       day  month  weekday   command
+*/30   8-22        *    *      1-5       PYTHONPATH=/app python /app/data_fetcher.py --mode prices
+   0   23          *    *      1-5       PYTHONPATH=/app python /app/data_fetcher.py --mode full
+   0    9          *    *      6         PYTHONPATH=/app python /app/data_fetcher.py --mode full
