@@ -1,10 +1,10 @@
 FROM python:3.11-slim-bookworm
 WORKDIR /app
 
-# Force apt to use HTTPS to avoid HTTP connection failures
-RUN echo 'Acquire::https::Verify-Peer "false";' > /etc/apt/apt.conf.d/99insecure \
-    && sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
-    || sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list
+# Switch apt sources to HTTPS (Docker build network blocks HTTP on some hosts)
+RUN printf 'deb https://deb.debian.org/debian bookworm main\ndeb https://deb.debian.org/debian bookworm-updates main\ndeb https://deb.debian.org/debian-security bookworm-security main\n' \
+    > /etc/apt/sources.list \
+    && rm -f /etc/apt/sources.list.d/*
 
 # Install system dependencies + curl (healthcheck) + supercronic (cron replacement)
 RUN apt-get update && apt-get install -y --no-install-recommends \
