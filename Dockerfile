@@ -28,3 +28,5 @@ RUN pip install --no-cache-dir --timeout=120 -r requirements.txt
 
 # Application code
 COPY app/ .
+
+CMD ["streamlit", "run", "app_streamlit.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]
