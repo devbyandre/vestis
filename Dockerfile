@@ -1,17 +1,9 @@
 FROM python:3.11-slim-bookworm
 WORKDIR /app
 
-# Switch apt sources to HTTPS (Docker build network blocks HTTP on some hosts)
-RUN printf 'deb https://deb.debian.org/debian bookworm main\ndeb https://deb.debian.org/debian bookworm-updates main\ndeb https://deb.debian.org/debian-security bookworm-security main\n' \
-    > /etc/apt/sources.list \
-    && rm -f /etc/apt/sources.list.d/*
-
-# Cache bust
-ARG CACHEBUST=1
-# Install system dependencies
+# Install only curl (needed for healthcheck) — no gcc/libpq-dev needed
+# because we use psycopg2-binary which has no C build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc \
-        libpq-dev \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
