@@ -22,7 +22,7 @@ RUN curl -fsSL "$SUPERCRONIC_URL" -o /usr/local/bin/supercronic \
 # Copy cron schedules into image
 COPY cron/ /app/cron/
 
-# Install Python dependencies with extended timeout for large packages
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir --timeout=120 -r requirements.txt
 
