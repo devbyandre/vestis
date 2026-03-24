@@ -1033,7 +1033,7 @@ def update_alert(alert_id, alert_type=None, params=None, notify_mode=None,
     updates.append("auto_managed = " + _ph()); values.append(int(automatic))
     if not updates:
         return
-    values.append(alert_id)
+    values.append(int(alert_id))
     with get_conn() as conn:
         conn.cursor().execute(f"UPDATE alerts SET {', '.join(updates)} WHERE id = {_ph()}", values)
         conn.commit()
