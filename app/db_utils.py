@@ -1383,7 +1383,7 @@ def update_security_risk_timeseries(security_id: int, portfolio_ids=None, conn=N
             mv = df_hold.loc[df_hold["date_only"] == date, "market_value"].sum()
             if mv > 0:
                 new_rows.append((date.strftime("%Y-%m-%d"), int(security_id),
-                                  row["risk_score"], mv, row["risk_score"]))
+                                  float(row["risk_score"]), float(mv), float(row["risk_score"])))
 
         if not new_rows:
             return
