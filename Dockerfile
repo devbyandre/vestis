@@ -6,6 +6,8 @@ RUN printf 'deb https://deb.debian.org/debian bookworm main\ndeb https://deb.deb
     > /etc/apt/sources.list \
     && rm -f /etc/apt/sources.list.d/*
 
+# Cache bust
+ARG CACHEBUST=1
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc \
