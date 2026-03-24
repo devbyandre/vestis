@@ -165,6 +165,14 @@ class _ConfigSingleton:
 
 # Public API
 def get_config(key: str) -> Any:
+    # Telegram credentials: prefer environment variables over config.json
+    import os as _os
+    if key == "telegram_bot_token":
+        v = _os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        if v: return v
+    if key == "telegram_chat_id":
+        v = _os.environ.get("TELEGRAM_CHAT_ID", "")
+        if v: return v
     return _ConfigSingleton().get(key)
 
 
