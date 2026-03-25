@@ -102,3 +102,11 @@ services:
 
 volumes:
   pgdata:
+volumes:
+  pgdata:
+
+networks:
+  default:
+  coolify_net:
+    external: true
+    name: coolify
