@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
+"""
+telegram_worker.py — Vestis alert engine
+"""
 import argparse
 import logging
 import time
+import re
+import json
 import pandas as pd
 import requests
 import middleware as mw
 from config_utils import get_config
-import json
-import re
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
-# ---------- Telegram helper ----------
-def escape_md(text: str) -> str:
-    """Escape special MarkdownV2 characters for Telegram."""
-    if not text:
-        return ""
-    # escape: _ * [ ] ( ) ~ ` > # + - = | { } . !
-    return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', str(text))
+def _md(text: str) -> str:
+    if not isinstance(text, str):
+        text = str(text)
+    return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', text)
 
 def _get_creds(cli_token=None, cli_chat=None):
     token = cli_token or get_config("telegram_bot_token")
-    chat = cli_chat or get_config("telegram_chat_id")
+    chat  = cli_chat  or get_config("telegram_chat_id")
     return token, chat
 
 def send_telegram(token: str, chat_id: str, text: str, max_retries: int = 3) -> bool:
@@ -32,334 +32,251 @@ def send_telegram(token: str, chat_id: str, text: str, max_retries: int = 3) -> 
         try:
             r = requests.post(url, json=payload, timeout=10)
             if r.status_code == 200:
-                logging.info("Telegram message sent ✅")
+                logging.info("Telegram message sent")
                 return True
-            logging.warning("Telegram send failed ❌ %s: %s", r.status_code, r.text)
+            logging.warning("Telegram send failed %s: %s", r.status_code, r.text[:200])
         except Exception:
-            logging.exception("Telegram send exception ❌")
+            logging.exception("Telegram send exception")
         time.sleep(backoff)
         backoff *= 2
     return False
 
-# ---------- Immediate alerts ----------
+def _describe_alert(alert_type: str, params) -> str:
+    try:
+        p = params if isinstance(params, dict) else json.loads(params or "{}")
+    except Exception:
+        p = {}
+    if alert_type == "price":
+        direction = p.get("direction", "")
+        threshold = p.get("threshold")
+        arrow = "above" if direction == "above" else "below"
+        icon = "📈" if direction == "above" else "📉"
+        if threshold:
+            return f"{icon} Price {arrow} {float(threshold):.2f}"
+        return "Price alert"
+    if alert_type == "rsi":
+        ob = p.get("overbought", 70)
+        os_ = p.get("underbought", 30)
+        return f"RSI overbought >{ob} or oversold <{os_}"
+    if alert_type in ("ma_crossover", "golden_cross", "death_cross"):
+        short = p.get("short", 20)
+        long_ = p.get("long", 50)
+        ct = p.get("crossover_type", "golden")
+        icon = "☀️" if ct == "golden" else "💀"
+        return f"{icon} {ct.capitalize()} cross ({short}/{long_} MA)"
+    if alert_type == "52w":
+        typ = p.get("type", "high")
+        return "🏔️ New 52-week high" if typ == "high" else "🕳️ New 52-week low"
+    if alert_type == "volume_spike":
+        mult = p.get("multiplier", 2)
+        return f"📊 Volume spike >{mult}x average"
+    return alert_type.replace("_", " ").title()
+
 def run_immediate(cli_token=None, cli_chat=None):
     token, chat = _get_creds(cli_token, cli_chat)
     if not token or not chat:
         logging.error("Telegram token/chat not configured.")
         return
-
-    dnd_raw = get_config("dnd")
-    dnd_enabled = str(dnd_raw or "false").lower() in ("1", "true", "yes")
-
+    dnd_enabled = str(get_config("dnd") or "false").lower() in ("1", "true", "yes")
+    if dnd_enabled:
+        logging.info("DND enabled — skipping immediate alerts")
+        return
     alerts_df = mw.get_alerts()
     if alerts_df.empty:
-        logging.info("No active alerts found")
+        logging.info("No active alerts")
         return
-
-    # Merge with securities and normalize columns
     sec_df = mw.get_all_securities()[['id', 'symbol', 'name']].rename(columns={'id': 'security_id'})
     alerts_df = alerts_df.merge(sec_df, on="security_id", how="left", suffixes=('_alert', '_sec'))
-
-    # Create final clean columns
-    alerts_df['symbol'] = alerts_df['symbol_sec'].fillna(alerts_df['symbol_alert']).fillna('??')
-    alerts_df['name'] = alerts_df['name'].fillna(alerts_df['security_name']).fillna('')
-    alerts_df = alerts_df[['id','security_id','symbol','name','alert_type','params',
-                           'cooldown_seconds','notify_mode','note']]  # drop dupes
-    alerts_df = alerts_df.sort_values('symbol')
-
-    # Group by symbol
+    alerts_df['symbol'] = alerts_df.get('symbol_sec', alerts_df.get('symbol_alert', '??')).fillna('??')
+    alerts_df['name']   = alerts_df.get('name', pd.Series(dtype=str)).fillna('')
+    now = pd.Timestamp.utcnow()
+    fired_count = 0
     for symbol, group in alerts_df.groupby('symbol'):
         sec_name = group['name'].iloc[0]
-        lines = [f"⚡ *Alert* — {escape_md(symbol)} {f'({escape_md(sec_name)})' if sec_name else ''}"]
-
-        sent_any = False
-        for alert in group.to_dict(orient="records"):
+        fired_lines = []
+        for alert in group.to_dict(orient='records'):
+            alert_id = alert['id']
+            notify_mode = alert.get('notify_mode') or 'immediate'
+            if notify_mode.startswith('digest'):
+                continue
+            cooldown = int(alert.get('cooldown_seconds') or 14400)
+            last_trigger = mw.last_trigger(alert_id)
+            if last_trigger and (now - last_trigger).total_seconds() < cooldown:
+                logging.debug("Alert %s on cooldown", alert_id)
+                continue
             try:
-                # --- cooldown check ---
-                last_trigger = mw.last_trigger(alert["id"])
-                cooldown = int(alert.get("cooldown_seconds") or 3600)
-                now = pd.Timestamp.utcnow()
-                if last_trigger and (now - last_trigger).total_seconds() < cooldown:
-                    logging.debug("Skipping alert %s due to cooldown", alert["id"])
-                    continue
-
-                # evaluate alert
-                if not mw.evaluate_alert(alert):
-                    continue
-
-                # DND check
-                if dnd_enabled and (alert.get("notify_mode") or "immediate") == "immediate":
-                    logging.info("DND enabled; skipping immediate alert %s", alert["id"])
-                    continue
-
-                params = alert.get("params", "")
-                lines.append(f"▫️ *Type:* {escape_md(alert['alert_type'])} — Params: `{escape_md(params)}`")
-                if alert.get("note"):
-                    lines.append(f"   📝 {escape_md(alert['note'])}")
-
-                # NEW: add timestamp
-                if last_trigger:
-                    lines.append(f"   ⏰ Last triggered: {escape_md(last_trigger.strftime('%Y-%m-%d %H:%M UTC'))}")
-                else:
-                    lines.append("   ⏰ First time trigger")
-
-                # log trigger AFTER sending message
-                sent_any = True
-
+                triggered = mw.evaluate_alert(alert)
             except Exception:
-                logging.exception("Error processing alert %s", alert["id"])
-
-        # send message if at least one alert fired
-        if sent_any:
-            if send_telegram(token, chat, "\n".join(lines)):
-                # log triggers only AFTER successful send
-                for alert in group.to_dict(orient="records"):
-                    last_trigger = mw.last_trigger(alert["id"])
-                    cooldown = int(alert.get("cooldown_seconds") or 3600)
-                    now = pd.Timestamp.utcnow()
-                    if not last_trigger or (now - last_trigger).total_seconds() >= cooldown:
-                        mw.log_trigger(alert["id"], {"note": "sent_immediate"})
-
-
-
-# ---------- Test alerts ----------
-def test_telegram_alerts(cli_token=None, cli_chat=None):
-    token, chat = _get_creds(cli_token, cli_chat)
-    if not token or not chat:
-        logging.error("Telegram token/chat not configured.")
-        return
-
-    logging.info("=== TESTING TELEGRAM ALERTS ===")
-    alerts_df = mw.get_alerts()
-    if alerts_df.empty:
-        logging.warning("No alerts found to test")
-        return
-
-    # Merge with securities and normalize columns
-    sec_df = mw.get_all_securities()[['id', 'symbol', 'name']].rename(columns={'id': 'security_id'})
-    alerts_df = alerts_df.merge(sec_df, on="security_id", how="left", suffixes=('_alert', '_sec'))
-
-    # Clean columns
-    alerts_df['symbol'] = alerts_df['symbol_sec'].fillna(alerts_df['symbol_alert']).fillna('??')
-    alerts_df['name'] = alerts_df['name'].fillna(alerts_df['security_name']).fillna('')
-    alerts_df = alerts_df[['id','security_id','symbol','name','alert_type','params','note']].drop_duplicates()
-    alerts_df = alerts_df.sort_values('symbol')
-
-    # Group by symbol
-    for symbol, group in alerts_df.groupby('symbol'):
-        sec_name = group['name'].iloc[0]
-        lines = [f"⚡ *TEST ALERT* — {escape_md(symbol)} {f'({escape_md(sec_name)})' if sec_name else ''}"]
-
-        sent_any = False
-        for alert in group.to_dict(orient="records"):
-            try:
-                if not mw.evaluate_alert(alert):
-                    continue
-
-                params = alert.get("params", "")
-                lines.append(f"▫️ *Type:* {escape_md(alert['alert_type'])} — Params: `{escape_md(params)}`")
-                if alert.get("note"):
-                    lines.append(f"   📝 {escape_md(alert['note'])}")
-
-                sent_any = True
-
-            except Exception:
-                logging.exception("Error testing alert %s", alert["id"])
-
-        if sent_any:
-            logging.info("Sending Telegram message for %s...", symbol)
-            send_telegram(token, chat, "\n".join(lines))
-
-    logging.info("=== TESTING COMPLETE ===")
-
-
-
-
-
-# ---------- Digest notifications ----------
-def _gather_digest_entries(since_ts, notify_mode):
-    return mw.get_alert_log_entries(since_ts, notify_mode)
-
-def send_digest(cli_token=None, cli_chat=None, freq="hourly"):
-    token, chat = _get_creds(cli_token, cli_chat)
-    if not token or not chat:
-        logging.error("Telegram token/chat not configured.")
-        return
-
-    key = f"last_digest_sent_{freq}"
-    last_sent = get_config(key)
-    since_ts = last_sent or (pd.Timestamp.utcnow() - pd.Timedelta(days=7)).isoformat()
-    notify_mode = f"digest_{freq}"
-
-    rows = _gather_digest_entries(since_ts, notify_mode)
-    if not rows:
-        logging.info("No digest entries for %s since %s", notify_mode, since_ts)
-        mw.set_config(key, pd.Timestamp.utcnow().isoformat())
-        return
-
-    # Group entries by symbol (security_id)
-    grouped = {}
-    for r in rows:
-        sec_id = r.get("security_id")
-        grouped.setdefault(sec_id, []).append(r)
-
-    parts = [f"📊 Digest — {freq.capitalize()}", ""]
-
-    for sec_id, alerts in grouped.items():
-        sec_info = mw.get_security_basic(sec_id)
-        sec_label = sec_info.get("symbol", f"ID {sec_id}")
-        sec_name = sec_info.get("name", "")
-
-        header = f"*{escape_md(sec_label)}*"
+                logging.exception("Error evaluating alert %s", alert_id)
+                continue
+            if not triggered:
+                continue
+            description = _describe_alert(alert.get('alert_type', ''), alert.get('params', ''))
+            line = f"  • {description}"
+            if alert.get('note'):
+                line += f" — {alert['note']}"
+            fired_lines.append((alert_id, line))
+        if not fired_lines:
+            continue
+        label = f"*{_md(symbol)}*"
         if sec_name:
-            header += f" ({escape_md(sec_name)})"
+            label += f" ({_md(sec_name)})"
+        header = f"⚡ *Alert* — {label}"
+        body = "\n".join([header] + [l for _, l in fired_lines])
+        body += f"\n\n_{now.strftime('%Y-%m-%d %H:%M UTC')}_"
+        if send_telegram(token, chat, body):
+            for alert_id, _ in fired_lines:
+                mw.log_trigger(alert_id, {"note": "immediate"})
+            fired_count += len(fired_lines)
+    logging.info("Immediate run complete — %d alerts fired", fired_count)
 
-        lines = [f"⚡ Digest — {header}"]
-
-        # Group by alert_type within this symbol
-        by_type = {}
-        for alert in alerts:
-            t = alert["alert_type"]
-            by_type.setdefault(t, {"count": 0, "notes": set()})
-            by_type[t]["count"] += 1
-            if alert.get("note"):
-                by_type[t]["notes"].add(alert["note"])
-
-        # Format each alert type
-        for t, info in by_type.items():
-            line = f"▫️ *Type:* {escape_md(t)} — Count: {info['count']}"
-            if info["notes"]:
-                line += " — 📝 " + "; ".join(info["notes"])
-            lines.append(line)
-
-        parts.extend(lines)
-        parts.append("")  # empty line between symbols
-
+def send_digest(cli_token=None, cli_chat=None, freq="daily"):
+    token, chat = _get_creds(cli_token, cli_chat)
+    if not token or not chat:
+        logging.error("Telegram token/chat not configured.")
+        return
+    now = pd.Timestamp.utcnow()
+    key = f"last_digest_sent_{freq}"
+    last_sent_raw = get_config(key)
+    since_ts = pd.Timestamp(last_sent_raw) if last_sent_raw else now - pd.Timedelta(days=1)
+    parts = []
+    try:
+        snap = mw.get_latest_holdings_snapshot(aggregate=True)
+        if not snap.empty:
+            total_mv   = snap['market_value'].sum()
+            total_cost = snap['cost_basis'].sum()
+            total_pnl  = total_mv - total_cost
+            pnl_pct    = (total_pnl / total_cost * 100) if total_cost else 0
+            pnl_icon   = "📈" if total_pnl >= 0 else "📉"
+            parts.append("📊 *Daily Portfolio Digest*")
+            parts.append("")
+            parts.append(f"💰 Total value: *{total_mv:,.0f}*")
+            parts.append(f"{pnl_icon} P&L: *{total_pnl:+,.0f}* ({pnl_pct:+.1f}%)")
+            parts.append("")
+            snap['pnl_pct'] = (snap['market_value'] - snap['cost_basis']) / snap['cost_basis'].replace(0, float('nan')) * 100
+            snap = snap.dropna(subset=['pnl_pct'])
+            if not snap.empty:
+                top3 = snap.nlargest(3, 'pnl_pct')
+                bot3 = snap.nsmallest(3, 'pnl_pct')
+                parts.append("🏆 *Top gainers:*")
+                for _, r in top3.iterrows():
+                    parts.append(f"  • {_md(str(r.get('symbol','?')))}: {r['pnl_pct']:+.1f}%")
+                parts.append("⚠️ *Underperformers:*")
+                for _, r in bot3.iterrows():
+                    parts.append(f"  • {_md(str(r.get('symbol','?')))}: {r['pnl_pct']:+.1f}%")
+                parts.append("")
+    except Exception:
+        logging.exception("Error building portfolio snapshot for digest")
+    try:
+        notify_mode = f"digest_{freq}"
+        rows = mw.get_alert_log_entries(since_ts.isoformat(), notify_mode)
+        if rows:
+            parts.append("🔔 *Alerts since last digest:*")
+            for r in rows:
+                try:
+                    info = mw.get_security_basic(r.get('security_id'))
+                    sym  = info.get('symbol', '?')
+                except Exception:
+                    sym = '?'
+                desc = _describe_alert(r.get('alert_type', ''), r.get('params', '{}'))
+                ts   = str(r.get('triggered_at', ''))[:16].replace('T', ' ')
+                line = f"  • *{_md(sym)}* — {desc}"
+                if r.get('note'):
+                    line += f" — {r['note']}"
+                if ts:
+                    line += f" ({ts})"
+                parts.append(line)
+            parts.append("")
+        else:
+            parts.append("🔔 *No alerts fired since last digest*")
+            parts.append("")
+    except Exception:
+        logging.exception("Error building alert digest")
+    parts.append(f"_{now.strftime('%Y-%m-%d %H:%M UTC')}_")
     body = "\n".join(parts)
     if send_telegram(token, chat, body):
-        mw.set_config(key, pd.Timestamp.utcnow().isoformat())
-        logging.info("Digest %s sent", freq)
+        mw.set_config(key, now.isoformat())
+        logging.info("Digest (%s) sent", freq)
 
+def test_telegram(cli_token=None, cli_chat=None):
+    token, chat = _get_creds(cli_token, cli_chat)
+    if not token or not chat:
+        logging.error("Telegram token/chat not configured.")
+        return
+    send_telegram(token, chat, "✅ *Vestis* — Telegram connection test successful!")
 
-
-
-# ---------- Automatic alert management ----------
-def ensure_alert(security_id, alert_type, params, note="", notify_mode="immediate", cooldown_seconds=3600):
-    """
-    Create or update an automatic alert if needed.
-    """
-    # Get only automatic alerts
-    alerts = mw.get_automatic_alerts()  # should return alerts with automatic=True
+def _ensure_alert(security_id, alert_type, params, note="",
+                  notify_mode="immediate", cooldown_seconds=14400):
+    alerts = mw.get_automatic_alerts()
     existing = alerts[
-        (alerts['security_id'] == security_id) &
+        (alerts['security_id'] == int(security_id)) &
         (alerts['alert_type'] == alert_type)
     ]
-
-    params_json = json.dumps(params, sort_keys=True)
-
+    params_str = json.dumps(params, sort_keys=True)
     if not existing.empty:
-        # Only take the first match (should be unique)
         alert = existing.iloc[0]
-        existing_params = json.loads(alert.get('params') or "{}")
-        if existing_params != params or (alert.get('note', '') != note):
-            logging.info("Updating automatic alert %s (%s)", security_id, alert_type)
-            mw.edit_alert(
-                alert_id=alert['id'],
-                params=params,
-                note=note,
-                automatic=True
-            )
-        else:
-            logging.debug("Automatic alert %s (%s) already up-to-date", security_id, alert_type)
+        current_params = json.loads(alert.get('params') or '{}')
+        if json.dumps(current_params, sort_keys=True) != params_str or alert.get('note', '') != note:
+            mw.edit_alert(alert_id=int(alert['id']), params=params, note=note, automatic=True)
     else:
-        logging.info("Creating automatic alert %s (%s)", security_id, alert_type)
-        mw.create_alert(
-            security_id=security_id,
-            alert_type=alert_type,
-            params=params,
-            note=note,
-            notify_mode=notify_mode,
-            cooldown_seconds=cooldown_seconds,
-            automatic=True
-        )
-
-
+        mw.create_alert(security_id=int(security_id), alert_type=alert_type,
+                        params=params, note=note, notify_mode=notify_mode,
+                        cooldown_seconds=cooldown_seconds, automatic=True)
 
 def maintain_alerts():
-    PROFIT_OFFSET = 0.05  # 5% below current price
-    holdings = mw.get_holdings()
-    watchlist = mw.get_watchlist_symbols()
-
-    for idx, row in holdings.iterrows():
-        symbol = row['symbol']
+    PROFIT_BUFFER = 0.05
+    try:
+        holdings = mw.get_holdings()
+    except Exception:
+        logging.exception("Could not load holdings for maintain_alerts")
+        return
+    for _, row in holdings.iterrows():
+        symbol      = row['symbol']
         security_id = row['security_id']
-
         data = mw.fetch_symbol_data(symbol)
         if not data or 'last_price' not in data:
+            logging.warning("fetch_symbol_data: no price history for %s", symbol)
             continue
-        current_price = data['last_price']
+        current_price = float(data['last_price'])
+        buy_price = float(row.get('avg_cost') or row.get('buy_price') or current_price)
+        if current_price > buy_price * 1.05:
+            threshold = round(current_price * (1 - PROFIT_BUFFER), 4)
+            _ensure_alert(security_id, "price",
+                          {"threshold": threshold, "mode": "absolute", "direction": "below"},
+                          note="Trailing stop — protect profits", cooldown_seconds=14400)
+        elif current_price < buy_price * 0.95:
+            _ensure_alert(security_id, "price",
+                          {"threshold": buy_price, "mode": "absolute", "direction": "above"},
+                          note="Recovery to buy price", notify_mode="digest_daily",
+                          cooldown_seconds=86400)
+    try:
+        watchlist = mw.get_watchlist_symbols()
+        for symbol in watchlist:
+            sec = mw.get_security(symbol)
+            if not sec:
+                continue
+            security_id = sec['id']
+            _ensure_alert(security_id, "ma_crossover",
+                          {"short": 20, "long": 50, "ma_type": "SMA", "crossover_type": "golden"},
+                          note="Golden cross — potential entry", notify_mode="digest_daily",
+                          cooldown_seconds=86400)
+    except Exception:
+        logging.exception("Error maintaining watchlist alerts")
 
-        # Determine buy price (fallback)
-        buy_price = row.get('buy_price', current_price)
-
-        # Positive holdings: protect profits
-        if current_price > buy_price:
-            threshold = max(current_price * (1-PROFIT_OFFSET), buy_price)
-            params = {"threshold": threshold, "mode":"absolute", "direction":"below"}
-            ensure_alert(security_id, "price", params, note="Secure profits")
-
-        # Negative holdings: recovery alert
-        elif current_price < buy_price:
-            params = {"threshold": buy_price, "mode":"absolute", "direction":"above"}
-            ensure_alert(security_id, "price", params, note="Recovery alert")
-
-    # Watchlist alerts
-    for symbol in watchlist:
-        security_id = mw.get_security(symbol)['id']
-        data = mw.fetch_symbol_data(symbol)
-        if not data or 'last_price' not in data:
-            continue
-
-        # RSI oversold
-        # params = {"window":14,"overbought":70,"underbought":30,"trigger_on":"Cross below underbought"}
-        # ensure_alert(security_id, "rsi", params, note="RSI oversold - potential buy", notify_mode="digest_daily")
-
-        # Golden cross
-        # params = {"short":50,"long":200,"ma_type":"SMA","crossover_type":"golden"}
-        params = {"short":20,"long":50,"ma_type":"SMA","crossover_type":"golden"}
-        ensure_alert(security_id, "ma_crossover", params, note="Golden cross - potential buy", notify_mode="digest_daily")
-
-        # Price dip
-        threshold = data['last_price'] * 0.95
-        params = {"threshold": threshold, "mode":"absolute", "direction":"below"}
-        ensure_alert(security_id, "price", params, note="Price dip - potential buy", notify_mode="digest_daily")
-
-
-
-
-# ---------- CLI ----------
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description="Vestis Telegram alert worker")
     ap.add_argument("--digest", choices=["hourly", "daily", "weekly"], default=None)
     ap.add_argument("--token", default=None)
-    ap.add_argument("--chat", default=None)
-    ap.add_argument("--test", action="store_true", help="Run Telegram test alerts")
+    ap.add_argument("--chat",  default=None)
+    ap.add_argument("--test",  action="store_true")
     args = ap.parse_args()
-
     if args.test:
-        test_telegram_alerts(args.token, args.chat)
+        test_telegram(args.token, args.chat)
         return
-
-    # Maintain automatic alerts only
     maintain_alerts()
-
-    # Evaluate all alerts (manual + automatic)
     run_immediate(args.token, args.chat)
-
-    # Send digest if requested
     if args.digest:
         send_digest(args.token, args.chat, args.digest)
 
 if __name__ == "__main__":
     main()
-
