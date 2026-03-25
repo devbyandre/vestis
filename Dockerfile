@@ -1,15 +1,12 @@
 FROM python:3.11-slim-bookworm
 WORKDIR /app
 
-# No apt-get needed:
-# - psycopg2-binary: pre-compiled wheel, no gcc/libpq-dev required
-# - curl: not needed in worker containers, healthcheck uses python instead
-# - supercronic: downloaded via pip alternative below
-
-# Install supercronic via pip-available binary
-ARG SUPERCRONIC_VERSION=v0.2.29
-RUN python3 -c "import urllib.request; urllib.request.urlretrieve('https://github.com/aptible/supercronic/releases/download/${SUPERCRONIC_VERSION}/supercronic-linux-amd64', '/usr/local/bin/supercronic')" \
-    && chmod +x /usr/local/bin/supercronic
+# Install supercronic directly via pip-available urllib (no apt needed)
+RUN python3 -c "\
+import urllib.request, os; \
+url='https://github.com/aptible/supercronic/releases/download/v0.2.29/supercronic-linux-amd64'; \
+urllib.request.urlretrieve(url, '/usr/local/bin/supercronic'); \
+os.chmod('/usr/local/bin/supercronic', 0o755)"
 
 # Copy cron schedules into image
 COPY cron/ /app/cron/
