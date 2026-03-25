@@ -1088,15 +1088,37 @@ def evaluate_alert(alert: dict) -> bool:
                          (direction == "below" and rsi_val < thr)
 
         elif a_type == "ma_crossover":
+            # Only fire if the cross happened within the last `lookback` bars
+            # (not just that fast MA is currently above slow MA — that would fire forever)
             short = int(params.get("short", 50))
-            long = int(params.get("long", 200))
-            direction = params.get("direction", "golden")
-            sma = data.get("sma", {})
-            if short in sma and long in sma:
-                if direction == "golden":
-                    result = sma[short] > sma[long]
-                else:
-                    result = sma[short] < sma[long]
+            long_ = int(params.get("long", 200))
+            crossover_type = params.get("crossover_type", params.get("direction", "golden"))
+            lookback = int(params.get("lookback_bars", 3))
+            try:
+                prices = db.get_price_history(symbol, lookback_days=400)
+                if prices is not None and not prices.empty and len(prices) > long_ + lookback:
+                    if 'adj_close' in prices.columns:
+                        adj = pd.to_numeric(prices['adj_close'], errors='coerce').ffill().bfill()
+                    else:
+                        adj = pd.to_numeric(prices['close'], errors='coerce').ffill().bfill()
+                    fast = adj.rolling(short).mean()
+                    slow = adj.rolling(long_).mean()
+                    # Check if cross occurred in the last `lookback` bars
+                    for i in range(-lookback, 0):
+                        prev_fast = fast.iloc[i - 1]
+                        prev_slow = slow.iloc[i - 1]
+                        curr_fast = fast.iloc[i]
+                        curr_slow = slow.iloc[i]
+                        if pd.isna(prev_fast) or pd.isna(prev_slow):
+                            continue
+                        if crossover_type == "golden" and prev_fast <= prev_slow and curr_fast > curr_slow:
+                            result = True
+                            break
+                        if crossover_type == "death" and prev_fast >= prev_slow and curr_fast < curr_slow:
+                            result = True
+                            break
+            except Exception:
+                logging.exception("evaluate_alert: ma_crossover failed for %s", symbol)
 
         elif a_type == "52w":
             typ = params.get("type", "high")
