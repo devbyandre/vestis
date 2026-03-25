@@ -38,6 +38,9 @@ services:
   # ─────────────────────────────────────────
   app:
     build: .
+    networks:
+      - default
+      - coolify_net
     container_name: stockapp-ui
     restart: unless-stopped
     depends_on:
@@ -62,6 +65,9 @@ services:
   # ─────────────────────────────────────────
   data-fetcher:
     build: .
+    networks:
+      - default
+      - coolify_net
     container_name: stockapp-fetcher
     restart: unless-stopped
     depends_on:
@@ -78,6 +84,9 @@ services:
   # ─────────────────────────────────────────
   telegram-worker:
     build: .
+    networks:
+      - default
+      - coolify_net
     container_name: stockapp-telegram
     restart: unless-stopped
     depends_on:
