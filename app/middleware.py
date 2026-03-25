@@ -1121,11 +1121,36 @@ def evaluate_alert(alert: dict) -> bool:
                 logging.exception("evaluate_alert: ma_crossover failed for %s", symbol)
 
         elif a_type == "52w":
+            # Only fire if the 52w high/low was broken in the last `lookback` bars
             typ = params.get("type", "high")
-            if typ == "high" and data.get("last_price") is not None and data.get("52w_high") is not None:
-                result = data["last_price"] >= data["52w_high"]
-            elif typ == "low" and data.get("last_price") is not None and data.get("52w_low") is not None:
-                result = data["last_price"] <= data["52w_low"]
+            lookback = int(params.get("lookback_bars", 3))
+            try:
+                prices = db.get_price_history(symbol, lookback_days=400)
+                if prices is not None and not prices.empty and len(prices) > lookback + 1:
+                    if 'adj_close' in prices.columns:
+                        adj = pd.to_numeric(prices['adj_close'], errors='coerce').ffill().bfill()
+                    else:
+                        adj = pd.to_numeric(prices['close'], errors='coerce').ffill().bfill()
+                    cutoff = pd.Timestamp.utcnow().replace(tzinfo=None) - pd.Timedelta(days=365)
+                    prices_copy = prices.copy()
+                    prices_copy['date'] = pd.to_datetime(prices_copy['date'], errors='coerce').apply(
+                        lambda t: t.replace(tzinfo=None) if pd.notna(t) else pd.NaT)
+                    for i in range(-lookback, 0):
+                        curr_price = adj.iloc[i]
+                        # compute 52w high/low up to bar i-1 (not including current bar)
+                        hist = adj.iloc[:len(adj)+i]
+                        hist_dates = prices_copy['date'].iloc[:len(adj)+i]
+                        hist_52w = hist[hist_dates >= cutoff]
+                        if hist_52w.empty:
+                            continue
+                        if typ == "high" and curr_price >= hist_52w.max():
+                            result = True
+                            break
+                        elif typ == "low" and curr_price <= hist_52w.min():
+                            result = True
+                            break
+            except Exception:
+                logging.exception("evaluate_alert: 52w failed for %s", symbol)
 
         elif a_type == "volume_spike":
             mult = float(params.get("multiplier", 2.0))
