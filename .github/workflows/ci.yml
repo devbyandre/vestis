@@ -38,7 +38,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r requirements.txt
+      - run: pip install -r requirements.txt -r requirements-test.txt
       - run: PYTHONPATH=app pytest tests/test_integration.py -v --tb=short
 
   integration-postgres:
@@ -64,7 +64,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r requirements.txt
+      - run: pip install -r requirements.txt -r requirements-test.txt
       - name: Init schema and run tests
         env:
           DATABASE_URL: postgresql://vestis:ci_throwaway_password@localhost:5432/vestis_test
@@ -82,7 +82,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r requirements.txt
+      - run: pip install -r requirements.txt -r requirements-test.txt
       - run: PYTHONPATH=app pytest tests/test_smoke.py -v --tb=short
 
   docker-build:
