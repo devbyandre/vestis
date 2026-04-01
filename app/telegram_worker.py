@@ -49,11 +49,25 @@ def _describe_alert(alert_type: str, params) -> str:
     if alert_type == "price":
         direction = p.get("direction", "")
         threshold = p.get("threshold")
+        mode = p.get("mode", "absolute")
         arrow = "above" if direction == "above" else "below"
         icon = "📈" if direction == "above" else "📉"
-        if threshold:
-            return f"{icon} Price {arrow} {float(threshold):.2f}"
-        return "Price alert"
+        if threshold and mode == "absolute":
+            return f"{icon} Price crossed {arrow} {float(threshold):.2f}"
+        elif threshold and mode == "relative":
+            return f"{icon} Price crossed {arrow} {float(threshold)*100:.1f}% threshold"
+        return "Price crossing alert"
+    if alert_type == "pct_change":
+        pct = p.get("pct", 5)
+        days = p.get("days", 1)
+        direction = p.get("direction", "down")
+        icon = "📉" if direction == "down" else "📈"
+        period = f"{days}d" if int(days) > 1 else "24h"
+        verb = "drop" if direction == "down" else "rise"
+        return f"{icon} Sudden {verb} >{pct}% in last {period}"
+    if alert_type == "earnings_soon":
+        days = p.get("days", 3)
+        return f"📅 Earnings in ≤{days} days"
     if alert_type == "rsi":
         ob = p.get("overbought", 70)
         os_ = p.get("underbought", 30)
@@ -115,18 +129,21 @@ def run_immediate(cli_token=None, cli_chat=None):
             line = f"  • {description}"
             if alert.get('note'):
                 line += f" — {alert['note']}"
-            fired_lines.append((alert_id, line))
+            fired_lines.append((alert_id, line, alert))
         if not fired_lines:
             continue
         label = f"*{_md(symbol)}*"
         if sec_name:
             label += f" ({_md(sec_name)})"
         header = f"⚡ *Alert* — {label}"
-        body = "\n".join([header] + [l for _, l in fired_lines])
+        body = "\n".join([header] + [l for _, l, _ in fired_lines])
         body += f"\n\n_{now.strftime('%Y-%m-%d %H:%M UTC')}_"
         if send_telegram(token, chat, body):
-            for alert_id, _ in fired_lines:
-                mw.log_trigger(alert_id, {"note": "immediate"})
+            for alert_id, _, al in fired_lines:
+                payload = {"note": "immediate"}
+                if al.get("_curr_side"):
+                    payload["side"] = al["_curr_side"]
+                mw.log_trigger(alert_id, payload)
             fired_count += len(fired_lines)
     logging.info("Immediate run complete — %d alerts fired", fired_count)
 
@@ -224,12 +241,12 @@ def _ensure_alert(security_id, alert_type, params, note="",
                         cooldown_seconds=cooldown_seconds, automatic=True)
 
 def maintain_alerts():
-    PROFIT_BUFFER = 0.05
     try:
         holdings = mw.get_holdings()
     except Exception:
         logging.exception("Could not load holdings for maintain_alerts")
         return
+
     for _, row in holdings.iterrows():
         symbol      = row['symbol']
         security_id = row['security_id']
@@ -239,16 +256,55 @@ def maintain_alerts():
             continue
         current_price = float(data['last_price'])
         buy_price = float(row.get('avg_cost') or row.get('buy_price') or current_price)
+
+        # Trailing stop: only for positions >5% in profit
+        # Threshold only moves UP — never down — so it truly trails
         if current_price > buy_price * 1.05:
-            threshold = round(current_price * (1 - PROFIT_BUFFER), 4)
-            _ensure_alert(security_id, "price",
-                          {"threshold": threshold, "mode": "absolute", "direction": "below"},
-                          note="Trailing stop — protect profits", cooldown_seconds=14400)
+            new_stop = round(current_price * 0.95, 4)
+            existing = mw.get_automatic_alerts()
+            ex = existing[
+                (existing['security_id'] == int(security_id)) &
+                (existing['alert_type'] == 'price')
+            ]
+            if not ex.empty:
+                try:
+                    old_stop = float(json.loads(ex.iloc[0].get('params') or '{}').get('threshold', 0))
+                except Exception:
+                    old_stop = 0
+                # Only raise the stop, never lower it
+                if new_stop > old_stop:
+                    _ensure_alert(security_id, "price",
+                                  {"threshold": new_stop, "mode": "absolute", "direction": "below"},
+                                  note=f"Trailing stop (95% of {current_price:.2f})",
+                                  cooldown_seconds=14400)
+            else:
+                _ensure_alert(security_id, "price",
+                              {"threshold": new_stop, "mode": "absolute", "direction": "below"},
+                              note=f"Trailing stop (95% of {current_price:.2f})",
+                              cooldown_seconds=14400)
+
+        # Recovery alert: position underwater, alert when it crosses back to buy price
         elif current_price < buy_price * 0.95:
             _ensure_alert(security_id, "price",
                           {"threshold": buy_price, "mode": "absolute", "direction": "above"},
-                          note="Recovery to buy price", notify_mode="digest_daily",
+                          note="Recovery to buy price",
+                          notify_mode="digest_daily",
                           cooldown_seconds=86400)
+
+        # Sudden drop alert: >5% drop in last 24h — always on for all holdings
+        _ensure_alert(security_id, "pct_change",
+                      {"pct": 5, "days": 1, "direction": "down"},
+                      note="Sudden drop >5% in 24h",
+                      cooldown_seconds=14400)
+
+        # Earnings soon: alert 3 days before earnings for any holding
+        _ensure_alert(security_id, "earnings_soon",
+                      {"days": 3},
+                      note="Earnings in 3 days",
+                      notify_mode="digest_daily",
+                      cooldown_seconds=86400)
+
+    # Watchlist: golden cross alert
     try:
         watchlist = mw.get_watchlist_symbols()
         for symbol in watchlist:
@@ -258,7 +314,8 @@ def maintain_alerts():
             security_id = sec['id']
             _ensure_alert(security_id, "ma_crossover",
                           {"short": 20, "long": 50, "ma_type": "SMA", "crossover_type": "golden"},
-                          note="Golden cross — potential entry", notify_mode="digest_daily",
+                          note="Golden cross — potential entry",
+                          notify_mode="digest_daily",
                           cooldown_seconds=86400)
     except Exception:
         logging.exception("Error maintaining watchlist alerts")

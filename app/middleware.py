@@ -1068,7 +1068,9 @@ def evaluate_alert(alert: dict) -> bool:
 
         result = False
 
-        # Example: price alert
+        # Price alert — crossing detection only
+        # Fires once when price crosses the threshold, not continuously while below/above.
+        # Stores the last "side" in the alert log to detect transitions.
         if a_type == "price":
             lp = data.get("last_price")
             if lp is not None:
@@ -1076,8 +1078,15 @@ def evaluate_alert(alert: dict) -> bool:
                 mode = params.get("mode", "absolute")
                 direction = params.get("direction", "above")
                 target = threshold if mode == "absolute" else lp * (1 + threshold)
-                result = (direction == "above" and lp > target) or \
-                         (direction == "below" and lp < target)
+                curr_side = "above" if lp > target else "below"
+                # Get last recorded side from alert log
+                last_log = db.get_last_alert_log(alert.get("id"))
+                prev_side = (last_log.get("side") if last_log else None)
+                # Fire only on transition to the alert direction
+                if curr_side == direction and prev_side != direction:
+                    result = True
+                # Always update side so next run knows where we are
+                alert["_curr_side"] = curr_side
 
         elif a_type == "rsi":
             rsi_val = data.get("rsi")
@@ -1159,6 +1168,50 @@ def evaluate_alert(alert: dict) -> bool:
             avg = data.get("avg_volume", {}).get(look)
             if vol is not None and avg is not None and avg > 0:
                 result = vol >= mult * avg
+
+        elif a_type == "pct_change":
+            # Fire when price has changed by more than pct% within the last `days` calendar days
+            # e.g. {"pct": 5, "days": 1, "direction": "down"} = dropped >5% in last 24h
+            pct = float(params.get("pct", 5)) / 100.0
+            days = int(params.get("days", 1))
+            direction = params.get("direction", "down")
+            try:
+                prices = db.get_price_history(symbol, lookback_days=days + 5)
+                if prices is not None and not prices.empty:
+                    if 'adj_close' in prices.columns:
+                        adj = pd.to_numeric(prices['adj_close'], errors='coerce').ffill()
+                    else:
+                        adj = pd.to_numeric(prices['close'], errors='coerce').ffill()
+                    prices_copy = prices.copy()
+                    prices_copy['date'] = pd.to_datetime(prices_copy['date'], errors='coerce').apply(
+                        lambda t: t.replace(tzinfo=None) if pd.notna(t) else pd.NaT)
+                    cutoff = pd.Timestamp.utcnow().replace(tzinfo=None) - pd.Timedelta(days=days)
+                    past = adj[prices_copy['date'] <= cutoff]
+                    if not past.empty:
+                        ref_price = float(past.iloc[-1])
+                        curr_price = float(adj.iloc[-1])
+                        change = (curr_price - ref_price) / ref_price
+                        if direction == "down":
+                            result = change <= -pct
+                        else:
+                            result = change >= pct
+            except Exception:
+                logging.exception("evaluate_alert: pct_change failed for %s", symbol)
+
+        elif a_type == "earnings_soon":
+            # Fire when earnings date is within `days` calendar days
+            days = int(params.get("days", 3))
+            try:
+                cache = db.get_security_cache(alert.get("security_id"))
+                if cache is not None:
+                    ts = cache.get("earningsTimestamp")
+                    if ts:
+                        earnings_dt = pd.Timestamp(ts).replace(tzinfo=None)
+                        now = pd.Timestamp.utcnow().replace(tzinfo=None)
+                        diff = (earnings_dt - now).days
+                        result = 0 <= diff <= days
+            except Exception:
+                logging.exception("evaluate_alert: earnings_soon failed for %s", symbol)
 
         elif a_type == "mos":
             mos_val = data.get("mos")

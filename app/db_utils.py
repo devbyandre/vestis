@@ -1068,6 +1068,19 @@ def log_alert_trigger(alert_id: int, payload: dict) -> None:
         conn.commit()
 
 
+def get_last_alert_log(alert_id: int) -> Optional[dict]:
+    """Return the payload dict from the most recent log entry for this alert."""
+    df = _read_sql(
+        "SELECT payload FROM alerts_log WHERE alert_id=? ORDER BY triggered_at DESC LIMIT 1",
+        (alert_id,),
+    )
+    if df.empty:
+        return None
+    try:
+        return json.loads(df.iloc[0]["payload"] or "{}")
+    except Exception:
+        return {}
+
 def last_trigger_time(alert_id: int) -> Optional[pd.Timestamp]:
     df = _read_sql(
         "SELECT triggered_at FROM alerts_log WHERE alert_id=? ORDER BY triggered_at DESC LIMIT 1",
