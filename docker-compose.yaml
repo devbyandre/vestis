@@ -54,6 +54,15 @@ services:
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     volumes:
       - ./config.json:/app/config.json:ro   # mount your config (optional)
+    labels:
+      - coolify.managed=true  # keep existing coolify labels
+      - traefik.enable=true
+      - traefik.http.routers.vestis.rule=Host(`vestis.homeserver.local`)
+      - traefik.http.routers.vestis.entrypoints=https
+      - traefik.http.routers.vestis.tls=true
+      - traefik.http.routers.vestis.middlewares=authentik@file
+      - traefik.http.routers.vestis.priority=100
+      - traefik.http.services.vestis.loadbalancer.server.port=8501
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
       interval: 30s
