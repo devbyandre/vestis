@@ -161,12 +161,12 @@ def display_kpi_table(df: pd.DataFrame):
         "pb_ratio": "{:.2f}",
         "dividendYield": "{:.2%}",
         "profitMargins": "{:.2%}"
-    }).applymap(temp_color, subset=["Temperature"]) \
-      .applymap(beta_color, subset=["beta"]) \
-      .applymap(pe_color, subset=["trailingPE"]) \
-      .applymap(pb_color, subset=["pb_ratio"]) \
-      .applymap(div_color, subset=["dividendYield"]) \
-      .applymap(profit_color, subset=["profitMargins"]) \
+    }).map(temp_color, subset=["Temperature"]) \
+      .map(beta_color, subset=["beta"]) \
+      .map(pe_color, subset=["trailingPE"]) \
+      .map(pb_color, subset=["pb_ratio"]) \
+      .map(div_color, subset=["dividendYield"]) \
+      .map(profit_color, subset=["profitMargins"]) \
       .set_properties(**{"font-family": "Arial, sans-serif", "font-size": "12pt"})
 
     st.dataframe(styled, use_container_width=True)
@@ -1554,8 +1554,8 @@ with tabs[2]:
                     "Impact Risk": "{:.2%}",
                     "Priority": "{:.2f}"
                 })
-                .applymap(color_pct, subset=["% Change"])
-                # .applymap(color_priority, subset=["Priority"])
+                .map(color_pct, subset=["% Change"])
+                # .map(color_priority, subset=["Priority"])
                 .set_properties(**{"font-family": "Arial, sans-serif", "font-size": "12pt"})
             )
 
@@ -1609,8 +1609,8 @@ with tabs[2]:
         #             "Impact Risk": "{:.2%}",
         #             "Priority": "{:.2f}"
         #         })
-        #         .applymap(color_pct, subset=["% Change"])
-        #         # .applymap(color_priority, subset=["Priority"])
+        #         .map(color_pct, subset=["% Change"])
+        #         # .map(color_priority, subset=["Priority"])
         #         .set_properties(**{"font-family": "Arial, sans-serif", "font-size": "12pt"})
         #     )
 
