@@ -5,7 +5,6 @@ services:
   # ─────────────────────────────────────────
   db:
     image: postgres:16-alpine
-    container_name: stockapp-db
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-stockapp}
@@ -24,7 +23,6 @@ services:
   # ─────────────────────────────────────────
   db-init:
     build: .
-    container_name: stockapp-db-init
     restart: "no"
     depends_on:
       db:
@@ -41,7 +39,6 @@ services:
     networks:
       - default
       - coolify_net
-    container_name: stockapp-ui
     restart: unless-stopped
     depends_on:
       db-init:
@@ -77,7 +74,6 @@ services:
     networks:
       - default
       - coolify_net
-    container_name: stockapp-fetcher
     restart: unless-stopped
     depends_on:
       db-init:
@@ -96,7 +92,6 @@ services:
     networks:
       - default
       - coolify_net
-    container_name: stockapp-telegram
     restart: unless-stopped
     depends_on:
       db-init:
