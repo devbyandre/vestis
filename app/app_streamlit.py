@@ -2401,6 +2401,8 @@ with tabs[5]:
                     display_type = "⬆️ <span style='color:green'>BUY</span>"
                 elif tx_type == "sell":
                     display_type = "⬇️ <span style='color:red'>SELL</span>"
+                elif tx_type == "split":
+                    display_type = f"🔀 <span style='color:orange'>SPLIT ×{row['quantity']:.2f}</span>"
                 else:
                     display_type = tx_type.upper()
 
@@ -2532,10 +2534,24 @@ with tabs[5]:
             tx_new_port = st.text_input("New portfolio name (if creating)", disabled=not is_new_port)
 
             tx_date = st.date_input("Date", value=dt.date.today(), key="tx_one_date")
-            tx_type = st.selectbox("Type", ["buy", "sell"], key="tx_one_type")
-            tx_qty = st.number_input("Quantity (shares)", min_value=0.0, value=1.0, step=1.0, format="%.5f")
-            tx_amount = st.number_input("Price per share (leave 0 to use latest price)", min_value=0.0, value=0.0, format="%.3f")
-            tx_fees = st.number_input("Fees", min_value=0.0, value=0.0)
+            #tx_type = st.selectbox("Type", ["buy", "sell"], key="tx_one_type")
+            tx_type = st.selectbox("Type", ["buy", "sell", "split"], key="tx_one_type")
+
+            if tx_type == "split":
+                st.info("📌 A **stock split** adjusts all historical buy/sell quantities and prices automatically. No tax event is triggered.")
+                tx_split_ratio = st.number_input(
+                    "Split ratio (new shares ÷ old shares)",
+                    min_value=0.01, value=2.0, step=0.5, format="%.4f",
+                    help="e.g. enter 3.0 for a 3-for-1 split, 0.5 for a 1-for-2 reverse split",
+                    key="tx_split_ratio"
+                )
+                tx_qty = tx_split_ratio
+                tx_amount = 0.0
+                tx_fees = 0.0
+            else:
+                tx_qty = st.number_input("Quantity (shares)", min_value=0.0, value=1.0, step=1.0, format="%.5f")
+                tx_amount = st.number_input("Price per share (leave 0 to use latest price)", min_value=0.0, value=0.0, format="%.3f")
+                tx_fees = st.number_input("Fees", min_value=0.0, value=0.0)
 
             tx_submit = st.form_submit_button("Add transaction")
 
@@ -2575,17 +2591,25 @@ with tabs[5]:
                         st.stop()
 
                 # Add transaction
-                mw.add_transaction(
-                    portfolio_id=portfolio_id,
-                    symbol=tx_symbol,
-                    tx_date=tx_date.isoformat(),
-                    tx_type=tx_type,
-                    quantity=tx_qty,
-                    price=price_to_use,
-                    fees=tx_fees
-                )
-
-                st.success("Transaction added")
+                if tx_type == "split":
+                    mw.add_split_transaction(
+                        portfolio_id=portfolio_id,
+                        symbol=tx_symbol,
+                        split_date=tx_date.isoformat(),
+                        ratio=tx_split_ratio
+                    )
+                    st.success(f"Split recorded for {tx_symbol} (ratio {tx_split_ratio:.4f}). Holdings have been recomputed.")
+                else:
+                    mw.add_transaction(
+                        portfolio_id=portfolio_id,
+                        symbol=tx_symbol,
+                        tx_date=tx_date.isoformat(),
+                        tx_type=tx_type,
+                        quantity=tx_qty,
+                        price=price_to_use,
+                        fees=tx_fees
+                    )
+                    st.success("Transaction added")
                 st.rerun()
 
     st.divider()

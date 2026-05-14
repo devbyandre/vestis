@@ -568,6 +568,51 @@ def list_transactions_detailed() -> pd.DataFrame:
         ORDER BY t.date DESC
     """)
 
+def get_recorded_splits(security_id: int) -> list:
+    """Return list of split dates already recorded as transactions for this security."""
+    df = _read_sql(
+        "SELECT date FROM transactions WHERE security_id=? AND type='split' ORDER BY date",
+        (security_id,)
+    )
+    if df.empty:
+        return []
+    return df['date'].tolist()
+
+
+def store_split_alert(security_id: int, split_date: str, ratio: float) -> None:
+    """
+    Store an unrecorded split alert so the Telegram worker can notify the user.
+    Uses the alerts_log table with a special alert_type marker.
+    Creates a placeholder alert if needed.
+    """
+    # Check if we already have an active split alert for this security/date
+    existing = _read_sql(
+        "SELECT id FROM alerts WHERE security_id=? AND alert_type='split_pending' AND active=1",
+        (security_id,)
+    )
+    if existing.empty:
+        # Create a split_pending alert (not subject to normal cooldown — fires until resolved)
+        sql = _adapt_sql("""
+            INSERT INTO alerts (security_id, alert_type, params, active, notify_mode, cooldown_seconds, auto_managed)
+            VALUES (?, 'split_pending', ?, 1, 'immediate', 3600, 1)
+        """)
+        with get_conn() as conn:
+            conn.cursor().execute(sql, (
+                security_id,
+                json.dumps({"split_date": split_date, "ratio": ratio})
+            ))
+            conn.commit()
+        logging.info("Created split_pending alert for security_id=%s date=%s ratio=%.4f",
+                     security_id, split_date, ratio)
+
+
+def clear_split_alert(security_id: int) -> None:
+    """Deactivate all split_pending alerts for a security (called after user records the split)."""
+    sql = _adapt_sql("UPDATE alerts SET active=0 WHERE security_id=? AND alert_type='split_pending'")
+    with get_conn() as conn:
+        conn.cursor().execute(sql, (security_id,))
+        conn.commit()
+
 
 def list_transactions_for_security(portfolio_id: int, security_id: int, conn=None) -> pd.DataFrame:
     sql = _adapt_sql("""
@@ -1256,6 +1301,82 @@ def get_holdings_timeseries(
     return df
 
 
+""" def recompute_holdings_timeseries(portfolio_id: int, security_id: int, conn=None) -> None:
+    own = conn is None
+    if own:
+        conn = get_conn()
+    try:
+        df_tx = list_transactions_for_security(portfolio_id, security_id)
+        if df_tx.empty:
+            clear_holdings_timeseries(security_id, portfolio_id, conn=conn)
+            if own:
+                conn.commit()
+            return
+
+        df_tx["date"] = pd.to_datetime(df_tx["date"]).dt.tz_localize(None)
+        df_tx = df_tx.sort_values("date").reset_index(drop=True)
+        start_date = df_tx["date"].min().date()
+        end_date = pd.Timestamp.utcnow().normalize().date()
+        all_dates = pd.date_range(start=start_date, end=end_date, freq="D")
+
+        df_prices = list_prices_for_security(security_id, start_date.isoformat(), end_date.isoformat())
+        if df_prices.empty:
+            clear_holdings_timeseries(security_id, portfolio_id, conn=conn)
+            if own:
+                conn.commit()
+            return
+
+        df_prices["date"] = pd.to_datetime(df_prices["date"]).dt.tz_localize(None)
+        df_prices = (df_prices.set_index("date").reindex(all_dates).ffill()
+                     .reset_index().rename(columns={"index": "date"}))
+        df_prices["price"] = df_prices["price"].fillna(0.0)
+
+        lots: deque = deque()
+        records = []
+        tx_idx = 0
+
+        for _, row in df_prices.iterrows():
+            cur_date = row["date"].date()
+            cur_price = float(row["price"] or 0.0)
+            if cur_price == 0:
+                continue
+            while tx_idx < len(df_tx) and df_tx.loc[tx_idx, "date"].date() <= cur_date:
+                tx = df_tx.loc[tx_idx]
+                qty = float(tx.get("quantity") or 0.0)
+                tx_price = float(tx.get("price")) if pd.notna(tx.get("price")) else cur_price
+                fees = float(tx.get("fees") or 0.0)
+                ttype = str(tx.get("type", "")).strip().lower()
+                if ttype == "buy":
+                    lots.append({"qty": qty, "price": tx_price, "fees": fees})
+                elif ttype == "sell":
+                    remaining = qty
+                    while remaining > 0 and lots:
+                        lot = lots[0]
+                        take = min(lot["qty"], remaining)
+                        lot["qty"] -= take
+                        remaining -= take
+                        if lot["qty"] <= 1e-12:
+                            lots.popleft()
+                tx_idx += 1
+
+            qty_hold = sum(l["qty"] for l in lots)
+            if qty_hold <= 0:
+                continue
+            cost_basis = sum(l["qty"] * l["price"] + l.get("fees", 0.0) for l in lots)
+            records.append((cur_date.isoformat(), int(portfolio_id), int(security_id),
+                            float(qty_hold), float(qty_hold * cur_price), float(cost_basis)))
+
+        clear_holdings_timeseries(security_id, portfolio_id, conn)
+        insert_holdings_timeseries(records, conn)
+        update_security_risk_timeseries(security_id, portfolio_id, conn=conn)
+        if own:
+            conn.commit()
+    except Exception:
+        logging.exception("recompute_holdings_timeseries failed")
+    finally:
+        if own:
+            conn.close() """
+
 def recompute_holdings_timeseries(portfolio_id: int, security_id: int, conn=None) -> None:
     own = conn is None
     if own:
@@ -1269,6 +1390,26 @@ def recompute_holdings_timeseries(portfolio_id: int, security_id: int, conn=None
             return
 
         df_tx["date"] = pd.to_datetime(df_tx["date"]).dt.tz_localize(None)
+
+        # Apply split adjustments before building lots
+        # (splits adjust prior buy/sell qty and price, then are removed)
+        splits = df_tx[df_tx["type"].str.lower() == "split"].copy()
+        if not splits.empty:
+            for _, sr in splits.sort_values("date").iterrows():
+                try:
+                    ratio = float(sr["quantity"])
+                except (ValueError, TypeError):
+                    continue
+                if ratio <= 0:
+                    continue
+                mask = (
+                    df_tx["type"].str.lower().isin(["buy", "sell"]) &
+                    (df_tx["date"] < sr["date"])
+                )
+                df_tx.loc[mask, "quantity"] = df_tx.loc[mask, "quantity"] * ratio
+                df_tx.loc[mask, "price"]    = df_tx.loc[mask, "price"]    / ratio
+            df_tx = df_tx[df_tx["type"].str.lower() != "split"].copy()
+
         df_tx = df_tx.sort_values("date").reset_index(drop=True)
         start_date = df_tx["date"].min().date()
         end_date = pd.Timestamp.utcnow().normalize().date()

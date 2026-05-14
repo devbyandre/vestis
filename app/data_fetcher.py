@@ -200,6 +200,64 @@ def fetch_prices_batch(
 # ---------------------
 # Fetch fundamentals & dividends
 # ---------------------
+""" def fetch_fundamentals_and_dividends(
+    symbol: str,
+    throttler: Throttler,
+    max_retries: int = 3,
+    fundamentals_update_hours: int = 24 * 7  # weekly
+) -> bool:
+    """
+    Fetch info, financials, and dividends for a single ticker.
+    Only updates if last fundamentals update is older than fundamentals_update_hours.
+    """
+    security_id = db.get_security_id(symbol)
+    last_update = db.get_last_info_update(security_id)
+    if not should_update(last_update, fundamentals_update_hours):
+        logging.info("Skipping %s, fundamentals updated recently.", symbol)
+        return False
+
+    for attempt in range(max_retries):
+        try:
+            logging.info("Fetching fundamentals & dividends for %s (attempt %d)...", symbol, attempt + 1)
+            t = yf.Ticker(symbol)
+
+            # Info
+            info = t.info or {}
+            if info:
+                db.store_security_cache(security_id, info)
+
+            # Financials
+            statements = {
+                'income_statement': getattr(t, 'financials', None),
+                'balance_sheet': getattr(t, 'balance_sheet', None),
+                'cashflow': getattr(t, 'cashflow', None),
+            }
+            db.store_financials(security_id, statements)
+
+            # Dividends
+            if not t.dividends.empty:
+                db.store_dividends(security_id, t.dividends)
+
+            logging.info("✅ Stored fundamentals & dividends for %s", symbol)
+            throttler.wait()
+            return True
+
+        except Exception as e:
+            msg = str(e).lower()
+            if "rate limit" in msg or "too many requests" in msg:
+                logging.error("❌ Yahoo Finance rate limit reached for %s. Stopping script.", symbol)
+                sys.exit(1)
+            else:
+                logging.warning("Failed to fetch fundamentals/dividends for %s (attempt %d/%d): %s", symbol, attempt + 1, max_retries, e)
+                time.sleep(2 ** attempt)
+
+    logging.error("❌ Failed to fetch fundamentals/dividends for %s after %d retries.", symbol, max_retries)
+    throttler.wait()
+    return False """
+
+# ---------------------
+# Fetch fundamentals & dividends
+# ---------------------
 def fetch_fundamentals_and_dividends(
     symbol: str,
     throttler: Throttler,
@@ -237,6 +295,26 @@ def fetch_fundamentals_and_dividends(
             # Dividends
             if not t.dividends.empty:
                 db.store_dividends(security_id, t.dividends)
+
+            # Split detection — check if Yahoo Finance reports splits not yet recorded
+            try:
+                yf_splits = t.splits
+                if yf_splits is not None and not yf_splits.empty:
+                    # Get splits already recorded in our transactions
+                    recorded = db.get_recorded_splits(security_id)
+                    recorded_dates = set(recorded) if recorded else set()
+                    for split_date, ratio in yf_splits.items():
+                        split_date_str = pd.Timestamp(split_date).strftime("%Y-%m-%d")
+                        if split_date_str not in recorded_dates:
+                            logging.warning(
+                                "⚠️ UNRECORDED SPLIT detected for %s: ratio=%.4f on %s — "
+                                "please add a split transaction in Vestis to adjust your holdings.",
+                                symbol, float(ratio), split_date_str
+                            )
+                            # Store in split_alerts table for Telegram notification
+                            db.store_split_alert(security_id, split_date_str, float(ratio))
+            except Exception:
+                logging.exception("Split detection failed for %s", symbol)
 
             logging.info("✅ Stored fundamentals & dividends for %s", symbol)
             throttler.wait()

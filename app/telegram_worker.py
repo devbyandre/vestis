@@ -41,6 +41,51 @@ def send_telegram(token: str, chat_id: str, text: str, max_retries: int = 3) -> 
         backoff *= 2
     return False
 
+""" def _describe_alert(alert_type: str, params) -> str:
+    try:
+        p = params if isinstance(params, dict) else json.loads(params or "{}")
+    except Exception:
+        p = {}
+    if alert_type == "price":
+        direction = p.get("direction", "")
+        threshold = p.get("threshold")
+        mode = p.get("mode", "absolute")
+        arrow = "above" if direction == "above" else "below"
+        icon = "📈" if direction == "above" else "📉"
+        if threshold and mode == "absolute":
+            return f"{icon} Price crossed {arrow} {float(threshold):.2f}"
+        elif threshold and mode == "relative":
+            return f"{icon} Price crossed {arrow} {float(threshold)*100:.1f}% threshold"
+        return "Price crossing alert"
+    if alert_type == "pct_change":
+        pct = p.get("pct", 5)
+        days = p.get("days", 1)
+        direction = p.get("direction", "down")
+        icon = "📉" if direction == "down" else "📈"
+        period = f"{days}d" if int(days) > 1 else "24h"
+        verb = "drop" if direction == "down" else "rise"
+        return f"{icon} Sudden {verb} >{pct}% in last {period}"
+    if alert_type == "earnings_soon":
+        days = p.get("days", 3)
+        return f"📅 Earnings in ≤{days} days"
+    if alert_type == "rsi":
+        ob = p.get("overbought", 70)
+        os_ = p.get("underbought", 30)
+        return f"RSI overbought >{ob} or oversold <{os_}"
+    if alert_type in ("ma_crossover", "golden_cross", "death_cross"):
+        short = p.get("short", 20)
+        long_ = p.get("long", 50)
+        ct = p.get("crossover_type", "golden")
+        icon = "☀️" if ct == "golden" else "💀"
+        return f"{icon} {ct.capitalize()} cross ({short}/{long_} MA)"
+    if alert_type == "52w":
+        typ = p.get("type", "high")
+        return "🏔️ New 52-week high" if typ == "high" else "🕳️ New 52-week low"
+    if alert_type == "volume_spike":
+        mult = p.get("multiplier", 2)
+        return f"📊 Volume spike >{mult}x average"
+    return alert_type.replace("_", " ").title() """
+
 def _describe_alert(alert_type: str, params) -> str:
     try:
         p = params if isinstance(params, dict) else json.loads(params or "{}")
@@ -84,9 +129,13 @@ def _describe_alert(alert_type: str, params) -> str:
     if alert_type == "volume_spike":
         mult = p.get("multiplier", 2)
         return f"📊 Volume spike >{mult}x average"
+    if alert_type == "split_pending":
+        split_date = p.get("split_date", "?")
+        ratio = p.get("ratio", "?")
+        return f"🔀 Unrecorded stock split: ratio {ratio} on {split_date} — please add a split transaction in Vestis"
     return alert_type.replace("_", " ").title()
 
-def run_immediate(cli_token=None, cli_chat=None):
+""" def run_immediate(cli_token=None, cli_chat=None):
     token, chat = _get_creds(cli_token, cli_chat)
     if not token or not chat:
         logging.error("Telegram token/chat not configured.")
@@ -125,6 +174,76 @@ def run_immediate(cli_token=None, cli_chat=None):
                 continue
             if not triggered:
                 continue
+            description = _describe_alert(alert.get('alert_type', ''), alert.get('params', ''))
+            line = f"  • {description}"
+            if alert.get('note'):
+                line += f" — {alert['note']}"
+            fired_lines.append((alert_id, line, alert))
+        if not fired_lines:
+            continue
+        label = f"*{_md(symbol)}*"
+        if sec_name:
+            label += f" ({_md(sec_name)})"
+        header = f"⚡ *Alert* — {label}"
+        body = "\n".join([header] + [l for _, l, _ in fired_lines])
+        body += f"\n\n_{now.strftime('%Y-%m-%d %H:%M UTC')}_"
+        if send_telegram(token, chat, body):
+            for alert_id, _, al in fired_lines:
+                payload = {"note": "immediate"}
+                if al.get("_curr_side"):
+                    payload["side"] = al["_curr_side"]
+                mw.log_trigger(alert_id, payload)
+            fired_count += len(fired_lines)
+    logging.info("Immediate run complete — %d alerts fired", fired_count) """
+
+def run_immediate(cli_token=None, cli_chat=None):
+    token, chat = _get_creds(cli_token, cli_chat)
+    if not token or not chat:
+        logging.error("Telegram token/chat not configured.")
+        return
+    dnd_enabled = str(get_config("dnd") or "false").lower() in ("1", "true", "yes")
+    if dnd_enabled:
+        logging.info("DND enabled — skipping immediate alerts")
+        return
+    alerts_df = mw.get_alerts()
+    if alerts_df.empty:
+        logging.info("No active alerts")
+        return
+    sec_df = mw.get_all_securities()[['id', 'symbol', 'name']].rename(columns={'id': 'security_id'})
+    alerts_df = alerts_df.merge(sec_df, on="security_id", how="left", suffixes=('_alert', '_sec'))
+    alerts_df['symbol'] = alerts_df.get('symbol_sec', alerts_df.get('symbol_alert', '??')).fillna('??')
+    alerts_df['name']   = alerts_df.get('name', pd.Series(dtype=str)).fillna('')
+    now = pd.Timestamp.utcnow()
+    fired_count = 0
+    for symbol, group in alerts_df.groupby('symbol'):
+        sec_name = group['name'].iloc[0]
+        fired_lines = []
+        for alert in group.to_dict(orient='records'):
+            alert_id = alert['id']
+            notify_mode = alert.get('notify_mode') or 'immediate'
+            if notify_mode.startswith('digest'):
+                continue
+            # split_pending alerts repeat every 24h until user records the split
+            alert_type_val = alert.get('alert_type', '')
+            if alert_type_val == 'split_pending':
+                cooldown = 86400  # remind once per day
+            else:
+                cooldown = int(alert.get('cooldown_seconds') or 14400)
+            last_trigger = mw.last_trigger(alert_id)
+            if last_trigger and (now - last_trigger).total_seconds() < cooldown:
+                logging.debug("Alert %s on cooldown", alert_id)
+                continue
+            # split_pending alerts are always triggered (fire until split is recorded)
+            if alert.get('alert_type') == 'split_pending':
+                triggered = True
+            else:
+                try:
+                    triggered = mw.evaluate_alert(alert)
+                except Exception:
+                    logging.exception("Error evaluating alert %s", alert_id)
+                    continue
+                if not triggered:
+                    continue
             description = _describe_alert(alert.get('alert_type', ''), alert.get('params', ''))
             line = f"  • {description}"
             if alert.get('note'):

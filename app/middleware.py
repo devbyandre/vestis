@@ -149,6 +149,84 @@ def list_transactions(portfolio_ids: Optional[List[int]] = None) -> pd.DataFrame
 def list_transactions_detailed() -> pd.DataFrame:
     return db.list_transactions_detailed()
 
+def apply_splits_to_transactions(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Retroactively adjust buy/sell quantities and prices for any stock splits
+    recorded as tx_type='split'.
+
+    A split row encodes:
+        quantity = new_shares / old_shares (e.g. 3.0 for a 3-for-1 split)
+        price    = 0
+        tx_date  = effective date of the split
+
+    For each split on symbol S with ratio R on date D:
+      - All buy/sell rows for S with tx_date < D get:
+          quantity *= R
+          price    /= R
+      - The split row itself is excluded from the returned DataFrame
+
+    Call this before any FIFO, dividends, or holdings calculation.
+    """
+    if df.empty:
+        return df
+
+    df = df.copy()
+    date_col = 'tx_date' if 'tx_date' in df.columns else 'date'
+    if not pd.api.types.is_datetime64_any_dtype(df[date_col]):
+        df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+
+    type_col = 'type' if 'type' in df.columns else 'tx_type'
+    splits = df[df[type_col].str.lower() == 'split'].copy()
+
+    if splits.empty:
+        return df[df[type_col].str.lower() != 'split'].copy()
+
+    for _, split_row in splits.iterrows():
+        sym        = split_row.get('symbol')
+        split_date = pd.to_datetime(split_row[date_col])
+        try:
+            ratio = float(split_row['quantity'])
+        except (ValueError, TypeError):
+            logging.warning("apply_splits: invalid ratio for %s on %s", sym, split_date)
+            continue
+        if ratio <= 0:
+            continue
+
+        mask = (
+            (df['symbol'] == sym) &
+            (df[type_col].str.lower().isin(['buy', 'sell'])) &
+            (pd.to_datetime(df[date_col]) < split_date)
+        )
+        df.loc[mask, 'quantity'] = df.loc[mask, 'quantity'] * ratio
+        df.loc[mask, 'price']    = df.loc[mask, 'price']    / ratio
+        logging.info(
+            "apply_splits: adjusted %d rows for %s (ratio %.4f, effective %s)",
+            mask.sum(), sym, ratio, split_date.date()
+        )
+
+    return df[df[type_col].str.lower() != 'split'].copy()
+
+
+def add_split_transaction(portfolio_id: int, symbol: str, split_date: str, ratio: float) -> None:
+    """
+    Record a stock split. ratio = new_shares / old_shares (e.g. 3.0 for 3-for-1).
+    Use 0.5 for a 1-for-2 reverse split.
+    All historical buy/sell quantities and prices are adjusted automatically
+    when holdings, FIFO gains, and dividends are calculated.
+    """
+    if ratio <= 0:
+        raise ValueError(f"Split ratio must be positive, got {ratio}")
+    sec_id = add_security(symbol)
+    db.insert_transaction(
+        portfolio_id, sec_id, split_date,
+        tx_type='split',
+        quantity=ratio,
+        price=0.0,
+        fees=0.0,
+    )
+    db.recompute_holdings_timeseries(portfolio_id, sec_id)
+    logging.info("Recorded split for %s: ratio=%.4f on %s", symbol, ratio, split_date)
+
 
 def get_watchlist()-> pd.DataFrame:
     """
@@ -703,6 +781,10 @@ def calc_dividends_for_portfolio(portfolio_ids: Optional[list] = None, year: Opt
         return pd.DataFrame(columns=['symbol','portfolio_id','date','dividend_per_share','shares','total','year'])
 
     tx['tx_date'] = pd.to_datetime(tx['date']).dt.date
+
+    # Apply split adjustments before FIFO — splits are not taxable events
+    tx = apply_splits_to_transactions(tx)
+
     rows = []
 
     tickers = tx['symbol'].dropna().unique()
@@ -750,8 +832,10 @@ def calc_capital_gains_fifo(portfolio_ids: Optional[list] = None, year: Optional
     df_tx = list_transactions(portfolio_ids)
     if df_tx.empty:
         return pd.DataFrame(columns=['portfolio_id','symbol','sell_date','quantity','proceeds','cost_basis','profit','year'])
-    
+
     df_tx['tx_date'] = pd.to_datetime(df_tx['date'])
+    # Apply split adjustments before FIFO — splits are not taxable events
+    df_tx = apply_splits_to_transactions(df_tx)
     rows = []
 
     for pid, g in df_tx.groupby('portfolio_id'):
@@ -762,6 +846,8 @@ def calc_capital_gains_fifo(portfolio_ids: Optional[list] = None, year: Optional
                 continue  # skip if no symbol
 
             typ = r['type'].lower()
+
+
             qty = float(r['quantity'])
             price = float(r['price']) if r['price'] else 0.0
             fees = float(r.get('fees') or 0.0)
