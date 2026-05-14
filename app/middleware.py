@@ -784,6 +784,8 @@ def calc_dividends_for_portfolio(portfolio_ids: Optional[list] = None, year: Opt
 
     # Apply split adjustments before FIFO — splits are not taxable events
     tx = apply_splits_to_transactions(tx)
+    # Re-normalize tx_date to date objects after split processing (apply_splits converts to datetime64)
+    tx["tx_date"] = pd.to_datetime(tx["tx_date"] if "tx_date" in tx.columns else tx["date"], errors="coerce").dt.date
 
     rows = []
 
