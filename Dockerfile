@@ -13,7 +13,7 @@ COPY cron/ /app/cron/
 
 # Install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir --timeout=120 --verbose -r requirements.txt 2>&1 | tail -50
+RUN pip install --no-cache-dir --timeout=120 -r requirements.txt
 
 # Application code
 COPY app/ .
