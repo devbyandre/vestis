@@ -614,6 +614,14 @@ def clear_split_alert(security_id: int) -> None:
         conn.commit()
 
 
+def list_transactions_for_security_any_portfolio(security_id: int) -> pd.DataFrame:
+    """Return all transactions for a security across all portfolios."""
+    return _read_sql(
+        "SELECT * FROM transactions WHERE security_id=? ORDER BY date",
+        (security_id,)
+    )
+
+
 def list_transactions_for_security(portfolio_id: int, security_id: int, conn=None) -> pd.DataFrame:
     sql = _adapt_sql("""
         SELECT t.*, p.name AS portfolio_name, s.yahoo_ticker AS symbol

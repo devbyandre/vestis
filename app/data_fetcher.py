@@ -236,23 +236,32 @@ def fetch_fundamentals_and_dividends(
             if not t.dividends.empty:
                 db.store_dividends(security_id, t.dividends)
 
-            # Split detection — check if Yahoo Finance reports splits not yet recorded
+            # Split detection — only for securities we actually hold,
+            # and only for splits after our first purchase date
             try:
                 yf_splits = t.splits
                 if yf_splits is not None and not yf_splits.empty:
-                    # Get splits already recorded in our transactions
-                    recorded = db.get_recorded_splits(security_id)
-                    recorded_dates = set(recorded) if recorded else set()
-                    for split_date, ratio in yf_splits.items():
-                        split_date_str = pd.Timestamp(split_date).strftime("%Y-%m-%d")
-                        if split_date_str not in recorded_dates:
-                            logging.warning(
-                                "⚠️ UNRECORDED SPLIT detected for %s: ratio=%.4f on %s — "
-                                "please add a split transaction in Vestis to adjust your holdings.",
-                                symbol, float(ratio), split_date_str
-                            )
-                            # Store in split_alerts table for Telegram notification
-                            db.store_split_alert(security_id, split_date_str, float(ratio))
+                    # Check if we have any transactions for this security
+                    tx = db.list_transactions_for_security_any_portfolio(security_id)
+                    if tx is None or tx.empty:
+                        pass  # not held — skip split detection
+                    else:
+                        # Only care about splits after our first buy
+                        first_buy = pd.to_datetime(tx['date']).min().replace(tzinfo=None)
+                        recorded = db.get_recorded_splits(security_id)
+                        recorded_dates = set(recorded) if recorded else set()
+                        for split_date, ratio in yf_splits.items():
+                            split_dt = pd.Timestamp(split_date).replace(tzinfo=None)
+                            if split_dt < first_buy:
+                                continue  # happened before we owned it — skip
+                            split_date_str = split_dt.strftime("%Y-%m-%d")
+                            if split_date_str not in recorded_dates:
+                                logging.warning(
+                                    "⚠️ UNRECORDED SPLIT detected for %s: ratio=%.4f on %s — "
+                                    "please add a split transaction in Vestis to adjust your holdings.",
+                                    symbol, float(ratio), split_date_str
+                                )
+                                db.store_split_alert(security_id, split_date_str, float(ratio))
             except Exception:
                 logging.exception("Split detection failed for %s", symbol)
 
