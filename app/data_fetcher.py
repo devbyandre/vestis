@@ -202,15 +202,17 @@ def fetch_fundamentals_and_dividends(
     symbol: str,
     throttler: Throttler,
     max_retries: int = 3,
-    fundamentals_update_hours: int = 24 * 7  # weekly
+    fundamentals_update_hours: int = 24 * 7,  # weekly
+    force: bool = False
 ) -> bool:
     """
     Fetch info, financials, and dividends for a single ticker.
-    Only updates if last fundamentals update is older than fundamentals_update_hours.
+    Only updates if last fundamentals update is older than fundamentals_update_hours,
+    unless force=True in which case the staleness check is skipped.
     """
     security_id = db.get_security_id(symbol)
     last_update = db.get_last_info_update(security_id)
-    if not should_update(last_update, fundamentals_update_hours):
+    if not force and not should_update(last_update, fundamentals_update_hours):
         logging.info("Skipping %s, fundamentals updated recently.", symbol)
         return False
 
@@ -287,7 +289,7 @@ def fetch_fundamentals_and_dividends(
 # ---------------------
 # Update a list of symbols: prices + fundamentals
 # ---------------------
-def update_symbols(symbols: List[str], throttler: Throttler) -> None:
+def update_symbols(symbols: List[str], throttler: Throttler, force: bool = False) -> None:
     if not symbols:
         return
 
@@ -302,7 +304,7 @@ def update_symbols(symbols: List[str], throttler: Throttler) -> None:
     prices_result = fetch_prices_batch(symbols, throttler, start_date=start_date)
 
     for sym in symbols:
-        fundamentals_success = fetch_fundamentals_and_dividends(sym, throttler)
+        fundamentals_success = fetch_fundamentals_and_dividends(sym, throttler, force=force)
         price_success = prices_result.get(sym, False)
 
         if price_success and fundamentals_success:
@@ -316,8 +318,12 @@ def update_symbols(symbols: List[str], throttler: Throttler) -> None:
 
 
 
-def run_fetch(tickers: List[str], batch_size: int = 20):
-    """Fetch and store data for a list of tickers in batches."""
+def run_fetch(tickers: List[str], batch_size: int = 20, force: bool = False):
+    """Fetch and store data for a list of tickers in batches.
+    
+    force=True bypasses the fundamentals staleness check and re-fetches
+    fundamentals + split detection even if recently updated.
+    """
     if not tickers:
         logging.info("No tickers provided, updating all securities in DB")
         tickers = db.get_all_symbols()
@@ -326,7 +332,7 @@ def run_fetch(tickers: List[str], batch_size: int = 20):
 
     for i in range(0, len(tickers), batch_size):
         batch = [t.strip() for t in tickers[i:i + batch_size]]
-        update_symbols(batch, throttler)
+        update_symbols(batch, throttler, force=force)
 
     # -----------------------------
     # Fetch missing FX conversion rates
@@ -527,7 +533,13 @@ if __name__ == "__main__":
         default="",
         help="Comma-separated tickers (optional). If empty, updates all securities in DB"
     )
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Force re-fetch fundamentals even if recently updated (bypasses staleness check)"
+    )
     args = ap.parse_args()
 
     tickers = [t.strip() for t in args.tickers.split(",") if t.strip()] if args.tickers else []
-    run_fetch(tickers)
+    run_fetch(tickers, force=args.force)
