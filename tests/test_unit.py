@@ -665,3 +665,139 @@ class TestCalcDividends:
         result = mw.calc_dividends_for_portfolio()
         assert result.iloc[0]["shares"] == pytest.approx(40.0)
         assert result.iloc[0]["total"] == pytest.approx(80.0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. Stock split tests — paste this class into tests/test_unit.py
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestApplySplitsToTransactions:
+    """Unit tests for middleware.apply_splits_to_transactions()."""
+
+    def _make_tx(self, rows):
+        """Helper: build a transactions DataFrame from a list of dicts."""
+        return pd.DataFrame(rows)
+
+    def test_no_splits_returns_unchanged(self):
+        """If there are no split rows the DataFrame passes through unchanged."""
+        df = self._make_tx([
+            {"symbol": "AAPL", "type": "buy",  "date": "2020-01-01", "quantity": 10.0, "price": 300.0},
+            {"symbol": "AAPL", "type": "sell", "date": "2021-06-01", "quantity":  5.0, "price": 350.0},
+        ])
+        result = mw.apply_splits_to_transactions(df)
+        assert len(result) == 2
+        assert result.iloc[0]["quantity"] == 10.0
+        assert result.iloc[0]["price"] == 300.0
+
+    def test_split_row_removed_from_output(self):
+        """Split rows themselves are excluded from the returned DataFrame."""
+        df = self._make_tx([
+            {"symbol": "AAPL", "type": "buy",   "date": "2020-01-01", "quantity": 10.0, "price": 300.0},
+            {"symbol": "AAPL", "type": "split", "date": "2020-08-31", "quantity":  4.0, "price":   0.0},
+        ])
+        result = mw.apply_splits_to_transactions(df)
+        assert len(result) == 1
+        assert result.iloc[0]["type"] == "buy"
+
+    def test_4_for_1_split_adjusts_quantity_and_price(self):
+        """A 4-for-1 split multiplies quantity by 4 and divides price by 4."""
+        df = self._make_tx([
+            {"symbol": "AAPL", "type": "buy",   "date": "2020-01-01", "quantity": 10.0, "price": 300.0},
+            {"symbol": "AAPL", "type": "split", "date": "2020-08-31", "quantity":  4.0, "price":   0.0},
+        ])
+        result = mw.apply_splits_to_transactions(df)
+        row = result.iloc[0]
+        assert row["quantity"] == pytest.approx(40.0)
+        assert row["price"]    == pytest.approx(75.0)
+
+    def test_split_only_affects_rows_before_split_date(self):
+        """Buys AFTER the split date are not adjusted."""
+        df = self._make_tx([
+            {"symbol": "AAPL", "type": "buy",   "date": "2020-01-01", "quantity": 10.0, "price": 300.0},
+            {"symbol": "AAPL", "type": "split", "date": "2020-08-31", "quantity":  4.0, "price":   0.0},
+            {"symbol": "AAPL", "type": "buy",   "date": "2020-09-01", "quantity":  5.0, "price":  80.0},
+        ])
+        result = mw.apply_splits_to_transactions(df).sort_values("date").reset_index(drop=True)
+        # Pre-split buy: adjusted
+        assert result.iloc[0]["quantity"] == pytest.approx(40.0)
+        assert result.iloc[0]["price"]    == pytest.approx(75.0)
+        # Post-split buy: unchanged
+        assert result.iloc[1]["quantity"] == pytest.approx(5.0)
+        assert result.iloc[1]["price"]    == pytest.approx(80.0)
+
+    def test_split_only_affects_matching_symbol(self):
+        """A split for AAPL does not adjust MSFT rows."""
+        df = self._make_tx([
+            {"symbol": "AAPL", "type": "buy",   "date": "2020-01-01", "quantity": 10.0, "price": 300.0},
+            {"symbol": "MSFT", "type": "buy",   "date": "2020-01-01", "quantity":  8.0, "price": 200.0},
+            {"symbol": "AAPL", "type": "split", "date": "2020-08-31", "quantity":  4.0, "price":   0.0},
+        ])
+        result = mw.apply_splits_to_transactions(df)
+        aapl = result[result["symbol"] == "AAPL"].iloc[0]
+        msft = result[result["symbol"] == "MSFT"].iloc[0]
+        assert aapl["quantity"] == pytest.approx(40.0)
+        assert aapl["price"]    == pytest.approx(75.0)
+        assert msft["quantity"] == pytest.approx(8.0)   # unchanged
+        assert msft["price"]    == pytest.approx(200.0) # unchanged
+
+    def test_reverse_split_adjusts_correctly(self):
+        """A 1-for-2 reverse split (ratio=0.5) halves quantity and doubles price."""
+        df = self._make_tx([
+            {"symbol": "GME", "type": "buy",   "date": "2022-01-01", "quantity": 100.0, "price": 20.0},
+            {"symbol": "GME", "type": "split", "date": "2022-06-01", "quantity":   0.5, "price":  0.0},
+        ])
+        result = mw.apply_splits_to_transactions(df)
+        row = result.iloc[0]
+        assert row["quantity"] == pytest.approx(50.0)
+        assert row["price"]    == pytest.approx(40.0)
+
+    def test_multiple_splits_applied_chronologically(self):
+        """Two splits are applied in date order, compounding correctly."""
+        df = self._make_tx([
+            {"symbol": "NVDA", "type": "buy",   "date": "2019-01-01", "quantity":  1.0, "price": 1000.0},
+            {"symbol": "NVDA", "type": "split", "date": "2021-07-20", "quantity":  4.0, "price":    0.0},
+            {"symbol": "NVDA", "type": "split", "date": "2024-06-10", "quantity": 10.0, "price":    0.0},
+        ])
+        result = mw.apply_splits_to_transactions(df)
+        # After 4-for-1: qty=4, price=250
+        # After 10-for-1: qty=40, price=25
+        row = result.iloc[0]
+        assert row["quantity"] == pytest.approx(40.0)
+        assert row["price"]    == pytest.approx(25.0)
+
+    def test_sell_rows_also_adjusted(self):
+        """Sell transactions before the split are also adjusted."""
+        df = self._make_tx([
+            {"symbol": "AAPL", "type": "buy",   "date": "2020-01-01", "quantity": 10.0, "price": 300.0},
+            {"symbol": "AAPL", "type": "sell",  "date": "2020-06-01", "quantity":  2.0, "price": 320.0},
+            {"symbol": "AAPL", "type": "split", "date": "2020-08-31", "quantity":  4.0, "price":   0.0},
+        ])
+        result = mw.apply_splits_to_transactions(df).sort_values("date").reset_index(drop=True)
+        buy  = result[result["type"] == "buy"].iloc[0]
+        sell = result[result["type"] == "sell"].iloc[0]
+        assert buy["quantity"]  == pytest.approx(40.0)
+        assert buy["price"]     == pytest.approx(75.0)
+        assert sell["quantity"] == pytest.approx(8.0)
+        assert sell["price"]    == pytest.approx(80.0)
+
+    def test_empty_dataframe_returns_empty(self):
+        """Empty input returns empty output without error."""
+        df = pd.DataFrame(columns=["symbol", "type", "date", "quantity", "price"])
+        result = mw.apply_splits_to_transactions(df)
+        assert result.empty
+
+    def test_cost_basis_preserved_after_split(self):
+        """Total cost basis (qty × price) is unchanged by a split."""
+        qty, price = 10.0, 300.0
+        ratio = 4.0
+        df = self._make_tx([
+            {"symbol": "AAPL", "type": "buy",   "date": "2020-01-01",
+             "quantity": qty, "price": price},
+            {"symbol": "AAPL", "type": "split", "date": "2020-08-31",
+             "quantity": ratio, "price": 0.0},
+        ])
+        result = mw.apply_splits_to_transactions(df)
+        row = result.iloc[0]
+        original_cost = qty * price
+        adjusted_cost = row["quantity"] * row["price"]
+        assert adjusted_cost == pytest.approx(original_cost)

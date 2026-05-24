@@ -85,13 +85,13 @@ def _conn_ctx():
 
 def get_conn():
     """
-    Return a new DBAPI connection.
+    Return a context-manager-compatible DBAPI connection.
 
-    Callers that use  `with get_conn() as conn:`  still work because psycopg2
-    and sqlite3 connections both support the context-manager protocol
-    (commit on __exit__ success, rollback on exception).
+    Always use as:  `with get_conn() as conn:`
+    Commit is automatic on success, rollback on exception.
+    Works for both SQLite (test) and PostgreSQL (production).
     """
-    return _engine.raw_connection()
+    return _conn_ctx()
 
 
 # ── SQL dialect helper ────────────────────────────────────────────────────────
