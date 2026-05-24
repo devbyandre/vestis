@@ -585,10 +585,11 @@ def store_split_alert(security_id: int, split_date: str, ratio: float) -> None:
     Uses the alerts_log table with a special alert_type marker.
     Creates a placeholder alert if needed.
     """
-    # Check if we already have an active split alert for this security/date
+    # Check if we already have ANY split alert for this exact split_date (active or inactive)
+    # This prevents duplicate alerts being created every fetch cycle
     existing = _read_sql(
-        "SELECT id FROM alerts WHERE security_id=? AND alert_type='split_pending' AND active=1",
-        (security_id,)
+        "SELECT id FROM alerts WHERE security_id=? AND alert_type='split_pending' AND params LIKE ?",
+        (security_id, f'%{split_date}%')
     )
     if existing.empty:
         # Create a split_pending alert (not subject to normal cooldown — fires until resolved)

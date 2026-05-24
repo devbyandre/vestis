@@ -2592,13 +2592,17 @@ with tabs[5]:
 
                 # Add transaction
                 if tx_type == "split":
-                    mw.add_split_transaction(
-                        portfolio_id=portfolio_id,
+                    applied = mw.add_split_transaction(
                         symbol=tx_symbol,
                         split_date=tx_date.isoformat(),
-                        ratio=tx_split_ratio
+                        ratio=tx_split_ratio,
+                        portfolio_id=portfolio_id  # fallback if security not in any portfolio
                     )
-                    st.success(f"Split recorded for {tx_symbol} (ratio {tx_split_ratio:.4f}). Holdings have been recomputed.")
+                    n = len(applied) if applied else 1
+                    st.success(
+                        f"✅ Split ×{tx_split_ratio:.4f} recorded for {tx_symbol} "
+                        f"across {n} portfolio(s). Holdings recomputed."
+                    )
                 else:
                     mw.add_transaction(
                         portfolio_id=portfolio_id,
