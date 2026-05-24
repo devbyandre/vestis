@@ -94,6 +94,14 @@ def get_conn():
     return _conn_ctx()
 
 
+def _raw_conn():
+    """
+    Return a raw DBAPI connection for functions that manage their own
+    commit/rollback/close lifecycle (the `own = conn is None` pattern).
+    """
+    return _engine.raw_connection()
+
+
 # ── SQL dialect helper ────────────────────────────────────────────────────────
 
 def _ph() -> str:
@@ -172,7 +180,7 @@ def insert_holdings_timeseries(records: list, conn=None) -> None:
 
     own = conn is None
     if own:
-        conn = get_conn()
+        conn = _raw_conn()
     try:
         cur = conn.cursor()
         cur.executemany(sql, records)
@@ -1232,7 +1240,7 @@ def list_prices_for_security(security_id: int, start_date: str, end_date: str) -
 def clear_holdings_timeseries(security_id: int, portfolio_id: Optional[int] = None, conn=None):
     own = conn is None
     if own:
-        conn = get_conn()
+        conn = _raw_conn()
     cur = conn.cursor()
     if portfolio_id is not None:
         cur.execute(
@@ -1313,7 +1321,7 @@ def get_holdings_timeseries(
 """ def recompute_holdings_timeseries(portfolio_id: int, security_id: int, conn=None) -> None:
     own = conn is None
     if own:
-        conn = get_conn()
+        conn = _raw_conn()
     try:
         df_tx = list_transactions_for_security(portfolio_id, security_id)
         if df_tx.empty:
@@ -1389,7 +1397,7 @@ def get_holdings_timeseries(
 def recompute_holdings_timeseries(portfolio_id: int, security_id: int, conn=None) -> None:
     own = conn is None
     if own:
-        conn = get_conn()
+        conn = _raw_conn()
     try:
         df_tx = list_transactions_for_security(portfolio_id, security_id)
         if df_tx.empty:
@@ -1503,7 +1511,7 @@ def get_security_risk_timeseries(security_id: int, start_date=None, end_date=Non
 def update_security_risk_timeseries(security_id: int, portfolio_ids=None, conn=None):
     own = conn is None
     if own:
-        conn = get_conn()
+        conn = _raw_conn()
     try:
         sec = get_security_by_id(int(security_id))
         if not sec:
@@ -1578,7 +1586,7 @@ def update_security_risk_timeseries(security_id: int, portfolio_ids=None, conn=N
 def delete_security_risk_timeseries(security_id: int, conn=None):
     own = conn is None
     if own:
-        conn = get_conn()
+        conn = _raw_conn()
     conn.cursor().execute(
         _adapt_sql("DELETE FROM security_risk_timeseries WHERE security_id=?"), (security_id,)
     )
