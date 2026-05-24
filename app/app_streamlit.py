@@ -2534,24 +2534,10 @@ with tabs[5]:
             tx_new_port = st.text_input("New portfolio name (if creating)", disabled=not is_new_port)
 
             tx_date = st.date_input("Date", value=dt.date.today(), key="tx_one_date")
-            #tx_type = st.selectbox("Type", ["buy", "sell"], key="tx_one_type")
-            tx_type = st.selectbox("Type", ["buy", "sell", "split"], key="tx_one_type")
-
-            if tx_type == "split":
-                st.info("📌 A **stock split** adjusts all historical buy/sell quantities and prices automatically. No tax event is triggered.")
-                tx_split_ratio = st.number_input(
-                    "Split ratio (new shares ÷ old shares)",
-                    min_value=0.01, value=2.0, step=0.5, format="%.4f",
-                    help="e.g. enter 3.0 for a 3-for-1 split, 0.5 for a 1-for-2 reverse split",
-                    key="tx_split_ratio"
-                )
-                tx_qty = tx_split_ratio
-                tx_amount = 0.0
-                tx_fees = 0.0
-            else:
-                tx_qty = st.number_input("Quantity (shares)", min_value=0.0, value=1.0, step=1.0, format="%.5f")
-                tx_amount = st.number_input("Price per share (leave 0 to use latest price)", min_value=0.0, value=0.0, format="%.3f")
-                tx_fees = st.number_input("Fees", min_value=0.0, value=0.0)
+            tx_type = st.selectbox("Type", ["buy", "sell"], key="tx_one_type")
+            tx_qty = st.number_input("Quantity (shares)", min_value=0.0, value=1.0, step=1.0, format="%.5f")
+            tx_amount = st.number_input("Price per share (leave 0 to use latest price)", min_value=0.0, value=0.0, format="%.3f")
+            tx_fees = st.number_input("Fees", min_value=0.0, value=0.0)
 
             tx_submit = st.form_submit_button("Add transaction")
 
@@ -2575,9 +2561,8 @@ with tabs[5]:
 
                 # Handle new security creation
                 if selected_label == "--- create new security ---":
-                    mw.add_security(tx_symbol, tx_name_input, tx_isin)  # implement in mw/db
+                    mw.add_security(tx_symbol, tx_name_input, tx_isin)
                 else:
-                    # ensure security exists in DB
                     sec_row = db.get_security_by_symbol(tx_symbol)
                     if not sec_row:
                         mw.add_security(tx_symbol, tx_name_input, tx_isin)
@@ -2590,36 +2575,75 @@ with tabs[5]:
                         st.error(f"No price available for {tx_symbol}")
                         st.stop()
 
-                # Add transaction
-                if tx_type == "split":
-                    applied = mw.add_split_transaction(
-                        symbol=tx_symbol,
-                        split_date=tx_date.isoformat(),
-                        ratio=tx_split_ratio,
-                        portfolio_id=portfolio_id  # fallback if security not in any portfolio
-                    )
-                    n = len(applied) if applied else 1
-                    st.success(
-                        f"✅ Split ×{tx_split_ratio:.4f} recorded for {tx_symbol} "
-                        f"across {n} portfolio(s). Holdings recomputed."
-                    )
-                else:
-                    mw.add_transaction(
-                        portfolio_id=portfolio_id,
-                        symbol=tx_symbol,
-                        tx_date=tx_date.isoformat(),
-                        tx_type=tx_type,
-                        quantity=tx_qty,
-                        price=price_to_use,
-                        fees=tx_fees
-                    )
-                    st.success("Transaction added")
+                mw.add_transaction(
+                    portfolio_id=portfolio_id,
+                    symbol=tx_symbol,
+                    tx_date=tx_date.isoformat(),
+                    tx_type=tx_type,
+                    quantity=tx_qty,
+                    price=price_to_use,
+                    fees=tx_fees
+                )
+                st.success("Transaction added")
                 st.rerun()
 
     st.divider()
 
+    # ── Record Stock Split ────────────────────────────────────────────────────
+    with st.expander("🔀 Record Stock Split", expanded=False):
+        st.markdown(
+            "Record a stock split to automatically adjust all historical buy/sell "
+            "quantities and prices. **No tax event is triggered.**"
+        )
+        st.markdown("The split is applied across **all portfolios** that hold or have held this security.")
 
-    # --- Manage portfolios ---   
+        with st.form("split_form"):
+            # Security selector — reuse same security list
+            all_sec = mw.get_all_securities()
+            split_sec_options = ["--- select security ---"]
+            if not all_sec.empty:
+                split_sec_options += [
+                    f"{row['name']} ({row['yahoo_ticker']})" if row.get('name') else row['yahoo_ticker']
+                    for _, row in all_sec.iterrows()
+                ]
+            split_sec_label = st.selectbox("Security", split_sec_options, key="split_sec_label")
+            split_symbol = ""
+            if split_sec_label != "--- select security ---":
+                # Extract ticker from label
+                split_symbol = split_sec_label.split("(")[-1].rstrip(")")
+
+            split_date = st.date_input("Split date", value=dt.date.today(), key="split_date")
+            split_ratio = st.number_input(
+                "Split ratio (new shares ÷ old shares)",
+                min_value=0.01, value=2.0, step=0.5, format="%.4f",
+                help="3.0 = 3-for-1 split (you get 3× shares at ⅓ price) · 0.5 = 1-for-2 reverse split"
+            )
+
+            col1, col2 = st.columns(2)
+            col1.metric("Example: shares before", "10")
+            col2.metric("Example: shares after", f"{10 * split_ratio:.0f}")
+
+            split_submit = st.form_submit_button("Record Split")
+
+            if split_submit:
+                if not split_symbol:
+                    st.error("Please select a security.")
+                    st.stop()
+                applied = mw.add_split_transaction(
+                    symbol=split_symbol,
+                    split_date=split_date.isoformat(),
+                    ratio=split_ratio,
+                )
+                n = len(applied) if applied else 1
+                st.success(
+                    f"✅ Split ×{split_ratio:.4f} recorded for **{split_symbol}** "
+                    f"across {n} portfolio(s). Holdings have been recomputed."
+                )
+                st.rerun()
+
+    st.divider()
+
+    # --- Manage portfolios ---
     st.subheader("Manage Portfolios")
 
     with st.expander("Portfolio Management", expanded=False):
