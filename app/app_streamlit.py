@@ -2603,13 +2603,13 @@ with tabs[5]:
             split_sec_options = ["--- select security ---"]
             if not all_sec.empty:
                 split_sec_options += [
-                    f"{row['name']} ({row['yahoo_ticker']})" if row.get('name') else row['yahoo_ticker']
+                    f"{row['name']} ({row['symbol']})" if row.get('name') else row['symbol']
                     for _, row in all_sec.iterrows()
                 ]
             split_sec_label = st.selectbox("Security", split_sec_options, key="split_sec_label")
             split_symbol = ""
             if split_sec_label != "--- select security ---":
-                # Extract ticker from label
+                # Extract ticker — last part in parentheses
                 split_symbol = split_sec_label.split("(")[-1].rstrip(")")
 
             split_date = st.date_input("Split date", value=dt.date.today(), key="split_date")
