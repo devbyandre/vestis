@@ -418,66 +418,78 @@ with tabs[0]:
                     # Aggregate per date (in case multiple securities/portfolios included)
                     df_daily = df_ts.groupby('date')[['market_value','cost_basis','net_value']].sum().reset_index()
                     df_daily = df_daily.sort_values('date')
-                    df_daily['cum_market'] = df_daily['market_value'].cumsum()
-                    df_daily['cum_net'] = df_daily['net_value'].cumsum()
-                    df_daily['cum_rel_perf'] = df_daily['cum_net'] / df_daily['cost_basis'].cumsum().replace({0: np.nan})
 
-                    # Instantaneous relative performance (per date) = net / cost at that date
-                    df_daily['rel_perf_inst'] = np.where(df_daily['cost_basis'] != 0, (df_daily['market_value'] - df_daily['cost_basis']) / df_daily['cost_basis'], np.nan)
+                    # ── Derived metrics ──────────────────────────────────────────────────
+                    # rel_perf: (market_value - cost_basis) / cost_basis at each date
+                    # This is a snapshot ratio, not a cumsum — each row is the full portfolio state
+                    df_daily['rel_perf'] = np.where(
+                        df_daily['cost_basis'] > 0,
+                        (df_daily['market_value'] - df_daily['cost_basis']) / df_daily['cost_basis'],
+                        np.nan
+                    )
+
+                    # cost_invested: tracks how much capital has been deployed over time
+                    # Use cost_basis directly — it already represents total invested cost at each date
+                    df_daily['cost_invested'] = df_daily['cost_basis']
 
                     col = st.columns(2)
                     with col[0]:
-                        # Chart: market_value and net_value (NOT cumsum) — final value should match snapshot
+                        # Market value vs cost basis over time
                         fig_mn = px.area(
                             df_daily,
                             x='date',
-                            y=['net_value', 'market_value'],
-                            labels={'value': '€', 'variable': 'Value Type', 'date': 'Date'},
-                            title="Market Value and Net Value Over Time (market_value vs market_value - cost_basis)"
+                            y=['market_value', 'cost_basis'],
+                            labels={'value': '€', 'variable': 'Type', 'date': 'Date'},
+                            title="Portfolio Value vs Cost Basis Over Time"
                         )
-                        # colors & visual hints
-                        fig_mn.update_traces(selector=dict(name='net_value'), line=dict(color='green'), opacity=0.8)
-                        fig_mn.update_traces(selector=dict(name='market_value'), line=dict(color='blue'), opacity=0.6)
-                        # show vertical spike on hover to compare
+                        fig_mn.update_traces(selector=dict(name='market_value'), line=dict(color='blue'), opacity=0.7)
+                        fig_mn.update_traces(selector=dict(name='cost_basis'), line=dict(color='orange'), opacity=0.6)
                         fig_mn.update_xaxes(showspikes=True, spikemode='across', spikecolor='grey', spikesnap='cursor')
                         fig_mn.update_layout(hovermode='x unified', yaxis_title="Value (€)")
                         st.plotly_chart(fig_mn, use_container_width=True)
-                        st.caption("**Interpretation:** Market value is your portfolio's total quoted value at each date. Net value = market value − cost basis (the realized/unrealized profit). The last datapoint for Market Value should match the snapshot Market Value above.")
+                        st.caption("**Market value** (blue) = current portfolio worth. **Cost basis** (orange) = total invested capital. Gap between them = unrealised profit/loss.")
 
                     with col[1]:
-                        # --- Chart: cumulative net (bottom) and cumulative market (top) overlapping ---
+                        # Net P&L over time (market_value - cost_basis)
                         fig1 = px.area(
                             df_daily,
                             x='date',
-                            y=['cum_net','cum_market'],
-                            labels={'value':'€','variable':'Value Type','date':'Date'},
-                            title="Cumulative Net Value (bottom) and Cumulative Market Value (top)"
+                            y='net_value',
+                            labels={'net_value': 'Net P&L (€)', 'date': 'Date'},
+                            title="Net P&L Over Time (Market Value − Cost Basis)"
                         )
-                        # Make colors and overlapping appearance clearer by editing traces
-                        fig1.update_traces(selector=dict(name='cum_net'), line=dict(color='green'))
-                        fig1.update_traces(selector=dict(name='cum_market'), line=dict(color='blue'), opacity=0.6)
-                        fig1.update_layout(yaxis_title="Value (€)", xaxis_title="Date", hovermode="x unified")
+                        fig1.update_traces(line=dict(color='green'))
+                        fig1.update_layout(yaxis_title="Net P&L (€)", hovermode="x unified")
                         st.plotly_chart(fig1, use_container_width=True)
-                        st.caption("Market value vs Net profit. Shows how invested capital and gains evolve over time.")
-                    
+                        st.caption("Unrealised profit/loss at each point in time. Positive = in profit, negative = underwater.")
+
                     col = st.columns(2)
                     with col[0]:
-                        # Chart: Relative Performance over time (instantaneous) — ends at snapshot rel perf
-                        fig_rel = px.line(df_daily, x='date', y='rel_perf_inst', title="Relative Performance Over Time")
-                        fig_rel.update_layout(hovermode='x unified', yaxis_title="Rel Perf (ratio)")
+                        # Relative performance over time
+                        fig_rel = px.line(
+                            df_daily, x='date', y='rel_perf',
+                            title="Relative Performance Over Time"
+                        )
+                        fig_rel.update_traces(line=dict(color='purple'))
+                        fig_rel.update_layout(hovermode='x unified', yaxis_title="Return on Cost")
+                        fig_rel.update_yaxes(tickformat=".1%")
                         fig_rel.update_xaxes(showspikes=True, spikemode='across', spikecolor='grey', spikesnap='cursor')
                         st.plotly_chart(fig_rel, use_container_width=True)
-                        st.caption("**Interpretation:** This shows the portfolio performance relative to the invested cost at each date. The final point equals the snapshot relative performance.")
-
+                        st.caption("**(Market Value − Cost) / Cost** at each date. Shows return on invested capital over time.")
 
                     with col[1]:
-                        # --- Chart: cumulative relative performance ---
-                        fig2 = px.area(df_daily, x='date', y='cum_rel_perf',
-                                       labels={'cum_rel_perf':'Cumulative Rel Perf (ratio)'},
-                                       title="Cumulative Relative Performance (cum_net / cum_cost)")
-                        fig2.update_xaxes(showspikes=True, spikemode='across', spikecolor='grey', spikesnap='cursor')
+                        # Indexed performance: start at 100, show growth
+                        first_mv = df_daily['market_value'].replace(0, np.nan).dropna().iloc[0] if not df_daily.empty else 1
+                        df_daily['indexed'] = df_daily['market_value'] / first_mv * 100
+                        fig2 = px.line(
+                            df_daily, x='date', y='indexed',
+                            title="Indexed Portfolio Value (Base = 100)"
+                        )
+                        fig2.update_traces(line=dict(color='teal'))
+                        fig2.update_layout(yaxis_title="Indexed Value", hovermode="x unified")
+                        fig2.add_hline(y=100, line_dash="dash", line_color="grey", opacity=0.5)
                         st.plotly_chart(fig2, use_container_width=True)
-                        st.caption("Cumulative relative performance. Ratio of profit vs invested cost basis.")
+                        st.caption("Portfolio value indexed to 100 at the start. Shows total growth factor regardless of invested amount.")
 
                     # ---------- Risk-Adjusted Performance ----------
 
@@ -516,12 +528,17 @@ with tabs[0]:
                     #     st.caption(f"Rolling {cagr_window}-year CAGR: helps identify periods of outperformance/underperformance.")
 
                     # --- Drawdown chart ---
-                    df_daily['cum_max'] = df_daily['net_value'].cummax()
-                    df_daily['drawdown'] = (df_daily['net_value'] - df_daily['cum_max']) / df_daily['cum_max']
-                    fig_dd = px.area(df_daily, x='date', y='drawdown', title="Portfolio Drawdown Over Time")
-                    fig_dd.update_yaxes(tickformat=".2%")
-                    st.plotly_chart(fig_dd, use_container_width=True)
-                    st.caption("Drawdown = percentage drop from previous peak. Highlights max risk exposure during downturns.")
+                    # Drawdown based on market_value (portfolio worth), not net_value
+                    # Filter to rows where market_value > 0 to avoid division issues
+                    dd_df = df_daily[df_daily['market_value'] > 0].copy()
+                    if not dd_df.empty:
+                        dd_df['cum_max'] = dd_df['market_value'].cummax()
+                        dd_df['drawdown'] = (dd_df['market_value'] - dd_df['cum_max']) / dd_df['cum_max']
+                        fig_dd = px.area(dd_df, x='date', y='drawdown', title="Portfolio Drawdown Over Time")
+                        fig_dd.update_yaxes(tickformat=".1%")
+                        fig_dd.update_traces(line=dict(color='red'), fillcolor='rgba(255,0,0,0.2)')
+                        st.plotly_chart(fig_dd, use_container_width=True)
+                        st.caption("Drawdown = % drop from previous portfolio peak (market value). Highlights worst loss periods.")
 
                      # --- Scatterplot / cluster-like grouping (performance groups) ---
                     scatter_df = h_filtered.copy()[['security_label','market_value','abs_perf','rel_perf','quantity','security_type']].copy()
