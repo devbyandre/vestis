@@ -409,6 +409,8 @@ with tabs[0]:
                 st.subheader("Performance")
             
                 with st.expander("Deeper Performance Analysis", expanded=False):
+                    # DEBUG — remove after confirming fix
+                    st.caption(f"DEBUG: df_ts rows={len(df_ts)}, last_mv={df_ts['market_value'].iloc[-1] if not df_ts.empty else 'empty':.0f}")
                     # Ensure sorting & numeric
                     df_ts = df_ts.sort_values('date').reset_index(drop=True)
                     df_ts['market_value'] = pd.to_numeric(df_ts['market_value'], errors='coerce').fillna(0.0)
