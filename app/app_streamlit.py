@@ -475,22 +475,35 @@ with tabs[0]:
                     col = st.columns(2)
                     with col[0]:
                         # Relative performance over time
-                        fig_rel = px.line(
-                            df_daily, x='date', y='rel_perf',
+                        fig_rel = go.Figure()
+                        fig_rel.add_trace(go.Scatter(
+                            x=df_daily['date'], y=df_daily['rel_perf'],
+                            name='Rel Performance', mode='lines',
+                            line=dict(color='purple', width=1.5)
+                        ))
+                        # Add LOWESS trendline via scipy
+                        try:
+                            from scipy.stats import linregress
+                            x_num = np.arange(len(df_daily))
+                            valid = df_daily['rel_perf'].notna()
+                            slope, intercept, _, _, _ = linregress(x_num[valid], df_daily['rel_perf'][valid])
+                            trend = slope * x_num + intercept
+                            fig_rel.add_trace(go.Scatter(
+                                x=df_daily['date'], y=trend,
+                                name='Trend', mode='lines',
+                                line=dict(color='white', dash='dash', width=1.5)
+                            ))
+                        except Exception:
+                            pass
+                        fig_rel.add_hline(y=0, line_dash="dot", line_color="grey", opacity=0.4)
+                        fig_rel.update_layout(
                             title="Relative Performance Over Time",
-                            trendline="lowess",
-                            trendline_options=dict(frac=0.1)
+                            hovermode='x unified', yaxis_title="Return on Cost",
+                            xaxis=dict(showspikes=True, spikemode='across', spikecolor='grey')
                         )
-                        fig_rel.update_traces(selector=dict(name='rel_perf'), line=dict(color='purple'))
-                        fig_rel.update_traces(selector=dict(type='scatter', mode='lines'), 
-                                             line=dict(color='white', dash='dash', width=1.5),
-                                             selector2=dict(name='lowess'))
-                        fig_rel.update_layout(hovermode='x unified', yaxis_title="Return on Cost")
                         fig_rel.update_yaxes(tickformat=".1%")
-                        fig_rel.update_xaxes(showspikes=True, spikemode='across', spikecolor='grey', spikesnap='cursor')
-                        fig_rel.add_hline(y=0, line_dash="dash", line_color="grey", opacity=0.4)
                         st.plotly_chart(fig_rel, use_container_width=True)
-                        st.caption("**(Market Value − Cost) / Cost** at each date. Dashed line = trend. Above 0% = in profit.")
+                        st.caption("**(Market Value − Cost) / Cost** at each date. Dashed = linear trend. Above 0% = in profit.")
 
                     with col[1]:
                         # Indexed performance: start at 100, show growth
