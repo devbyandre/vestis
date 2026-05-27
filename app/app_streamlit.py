@@ -415,7 +415,7 @@ with tabs[0]:
                     df_ts['cost_basis'] = pd.to_numeric(df_ts['cost_basis'], errors='coerce').fillna(0.0)
                     df_ts['net_value'] = df_ts['market_value'] - df_ts['cost_basis']
 
-                    # Aggregate per date (in case multiple securities/portfolios included)
+                    # Aggregate per date (deduplication handled in middleware.holdings_timeseries)
                     df_daily = df_ts.groupby('date')[['market_value','cost_basis','net_value']].sum().reset_index()
                     df_daily = df_daily.sort_values('date')
 
@@ -528,6 +528,55 @@ with tabs[0]:
                     #     st.caption(f"Rolling {cagr_window}-year CAGR: helps identify periods of outperformance/underperformance.")
 
                     # --- Drawdown chart ---
+                    # ── Annual return bar chart ──────────────────────────────────
+                    df_annual = df_daily.copy()
+                    df_annual['year'] = pd.to_datetime(df_annual['date']).dt.year
+                    # Last market_value and cost_basis per year
+                    yr = df_annual.groupby('year').last().reset_index()
+                    yr['prev_mv'] = yr['market_value'].shift(1)
+                    yr['annual_return'] = np.where(
+                        yr['prev_mv'] > 0,
+                        (yr['market_value'] - yr['prev_mv']) / yr['prev_mv'],
+                        np.nan
+                    )
+                    yr = yr.dropna(subset=['annual_return'])
+                    if not yr.empty:
+                        yr['color'] = yr['annual_return'].apply(lambda x: 'green' if x >= 0 else 'red')
+                        fig_ann = px.bar(
+                            yr, x='year', y='annual_return',
+                            color='color',
+                            color_discrete_map={'green': '#26a641', 'red': '#e05252'},
+                            title="Annual Portfolio Return by Year"
+                        )
+                        fig_ann.update_layout(yaxis_title="Annual Return", showlegend=False, hovermode="x unified")
+                        fig_ann.update_yaxes(tickformat=".1%")
+                        fig_ann.update_traces(texttemplate='%{y:.1%}', textposition='outside')
+                        st.plotly_chart(fig_ann, use_container_width=True)
+                        st.caption("Year-on-year portfolio return based on market value change. Excludes cash flows within the year.")
+
+                    # ── Rolling 12-month return ───────────────────────────────────────
+                    df_roll = df_daily.copy()
+                    df_roll['date'] = pd.to_datetime(df_roll['date'])
+                    df_roll = df_roll.set_index('date').sort_index()
+                    df_roll['mv_12m_ago'] = df_roll['market_value'].shift(252)  # ~252 trading days
+                    df_roll['rolling_12m'] = np.where(
+                        df_roll['mv_12m_ago'] > 0,
+                        (df_roll['market_value'] - df_roll['mv_12m_ago']) / df_roll['mv_12m_ago'],
+                        np.nan
+                    )
+                    df_roll = df_roll.dropna(subset=['rolling_12m']).reset_index()
+                    if not df_roll.empty:
+                        fig_roll = px.line(
+                            df_roll, x='date', y='rolling_12m',
+                            title="Rolling 12-Month Return"
+                        )
+                        fig_roll.update_traces(line=dict(color='#f0a500'))
+                        fig_roll.update_layout(yaxis_title="12-Month Return", hovermode="x unified")
+                        fig_roll.update_yaxes(tickformat=".1%")
+                        fig_roll.add_hline(y=0, line_dash="dash", line_color="grey", opacity=0.5)
+                        st.plotly_chart(fig_roll, use_container_width=True)
+                        st.caption("Return over the trailing 12 months at each date. Above zero = portfolio grew more than it lost in the prior year.")
+
                     # Drawdown based on market_value (portfolio worth), not net_value
                     # Filter to rows where market_value > 0 to avoid division issues
                     dd_df = df_daily[df_daily['market_value'] > 0].copy()

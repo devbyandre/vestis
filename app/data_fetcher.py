@@ -16,6 +16,57 @@ import sys
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
+# ── Fetch run failure tracking ──────────────────────────────────────────────
+_fetch_errors: list = []    # full failures (both prices and fundamentals)
+_fetch_warnings: list = []  # partial failures (one of the two succeeded)
+
+
+def _notify_fetch_summary() -> None:
+    """Send a Telegram summary if any fetch failures occurred during this run."""
+    global _fetch_errors, _fetch_warnings
+    if not _fetch_errors and not _fetch_warnings:
+        _fetch_errors = []
+        _fetch_warnings = []
+        return
+
+    try:
+        from config_utils import get_config
+        import requests as _req
+        token = get_config("telegram_bot_token")
+        chat  = get_config("telegram_chat_id")
+        if not token or not chat:
+            _fetch_errors = []
+            _fetch_warnings = []
+            return
+
+        lines = ["🔴 *Data Fetcher — Issues Detected*", ""]
+        if _fetch_errors:
+            lines.append(f"*{len(_fetch_errors)} failures:*")
+            lines.extend(_fetch_errors[:10])  # cap at 10 to avoid huge messages
+            if len(_fetch_errors) > 10:
+                lines.append(f"_...and {len(_fetch_errors) - 10} more_")
+            lines.append("")
+        if _fetch_warnings:
+            lines.append(f"*{len(_fetch_warnings)} partial:*")
+            lines.extend(_fetch_warnings[:5])
+            if len(_fetch_warnings) > 5:
+                lines.append(f"_...and {len(_fetch_warnings) - 5} more_")
+
+        lines.append("\n_Check logs for details_")
+        msg = "\n".join(lines)
+
+        _req.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat, "text": msg, "parse_mode": "Markdown"},
+            timeout=10
+        )
+        logging.info("Fetch failure summary sent to Telegram")
+    except Exception:
+        logging.exception("Failed to send fetch summary to Telegram")
+    finally:
+        _fetch_errors = []
+        _fetch_warnings = []
+
 
 # ---------------------
 # Throttling
@@ -345,10 +396,13 @@ def update_symbols(symbols: List[str], throttler: Throttler, force: bool = False
             logging.info("✅ Fully updated %s", sym)
         elif price_success:
             logging.warning("⚠️ Only prices updated for %s", sym)
+            _fetch_warnings.append(f"⚠️ {sym}: prices only (fundamentals skipped/failed)")
         elif fundamentals_success:
             logging.warning("⚠️ Only fundamentals updated for %s", sym)
+            _fetch_warnings.append(f"⚠️ {sym}: fundamentals only (prices failed)")
         else:
             logging.error("❌ Failed to update %s", sym)
+            _fetch_errors.append(f"❌ {sym}: both prices and fundamentals failed")
 
 
 
@@ -378,6 +432,9 @@ def run_fetch(tickers: List[str], batch_size: int = 20, force: bool = False):
         logging.info("✅ FX rates updated successfully.")
     else:
         logging.warning("⚠️ FX rate update incomplete or failed.")
+
+    # ── Send Telegram summary if any failures occurred ─────────────────────
+    _notify_fetch_summary()
 
 
 def fetch_missing_fx_rates(

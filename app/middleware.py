@@ -1485,6 +1485,13 @@ def holdings_timeseries(
     if not aggregate:
         return df
 
+    # Deduplicate: if a security appears in multiple portfolios, sum across portfolios
+    # but only count each security once per date (avoids double-counting shared ETFs)
+    if 'security_id' in df.columns:
+        df = df.groupby(['date', 'security_id']).agg(
+            {'market_value': 'sum', 'cost_basis': 'sum'}
+        ).reset_index()
+
     # aggregate per date (all portfolios/securities combined)
     df_grouped = (
         df.groupby('date')
