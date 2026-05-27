@@ -432,21 +432,30 @@ with tabs[0]:
                     # Use cost_basis directly — it already represents total invested cost at each date
                     df_daily['cost_invested'] = df_daily['cost_basis']
 
+                    import plotly.graph_objects as go
                     col = st.columns(2)
                     with col[0]:
-                        # Market value vs cost basis over time
-                        fig_mn = px.area(
-                            df_daily,
-                            x='date',
-                            y=['market_value', 'cost_basis'],
-                            labels={'value': '€', 'variable': 'Type', 'date': 'Date'},
-                            title="Portfolio Value vs Cost Basis Over Time"
+                        # Market value vs cost basis — use go.Scatter to avoid px.area stacking
+                        # px.area with multiple y-series stacks them (mv + cost = wrong total)
+                        fig_mn = go.Figure()
+                        fig_mn.add_trace(go.Scatter(
+                            x=df_daily['date'], y=df_daily['market_value'],
+                            name='Market Value', fill='tozeroy',
+                            line=dict(color='#4C72B0', width=1.5),
+                            fillcolor='rgba(76,114,176,0.3)'
+                        ))
+                        fig_mn.add_trace(go.Scatter(
+                            x=df_daily['date'], y=df_daily['cost_basis'],
+                            name='Cost Basis', fill='tozeroy',
+                            line=dict(color='#DD8452', width=1.5),
+                            fillcolor='rgba(221,132,82,0.4)'
+                        ))
+                        fig_mn.update_layout(
+                            title="Portfolio Value vs Cost Basis Over Time",
+                            hovermode='x unified', yaxis_title="Value (€)",
+                            xaxis=dict(showspikes=True, spikemode='across', spikecolor='grey')
                         )
-                        fig_mn.update_traces(selector=dict(name='market_value'), line=dict(color='blue'), opacity=0.7)
-                        fig_mn.update_traces(selector=dict(name='cost_basis'), line=dict(color='orange'), opacity=0.6)
-                        fig_mn.update_xaxes(showspikes=True, spikemode='across', spikecolor='grey', spikesnap='cursor')
-                        fig_mn.update_layout(hovermode='x unified', yaxis_title="Value (€)")
-                        st.plotly_chart(fig_mn, use_container_width=True, key="perf_chart_1")
+                        st.plotly_chart(fig_mn, use_container_width=True)
                         st.caption("**Market value** (blue) = current portfolio worth. **Cost basis** (orange) = total invested capital. Gap between them = unrealised profit/loss.")
 
                     with col[1]:
@@ -460,7 +469,7 @@ with tabs[0]:
                         )
                         fig1.update_traces(line=dict(color='green'))
                         fig1.update_layout(yaxis_title="Net P&L (€)", hovermode="x unified")
-                        st.plotly_chart(fig1, use_container_width=True, key="perf_chart_2")
+                        st.plotly_chart(fig1, use_container_width=True)
                         st.caption("Unrealised profit/loss at each point in time. Positive = in profit, negative = underwater.")
 
                     col = st.columns(2)
@@ -468,14 +477,20 @@ with tabs[0]:
                         # Relative performance over time
                         fig_rel = px.line(
                             df_daily, x='date', y='rel_perf',
-                            title="Relative Performance Over Time"
+                            title="Relative Performance Over Time",
+                            trendline="lowess",
+                            trendline_options=dict(frac=0.1)
                         )
-                        fig_rel.update_traces(line=dict(color='purple'))
+                        fig_rel.update_traces(selector=dict(name='rel_perf'), line=dict(color='purple'))
+                        fig_rel.update_traces(selector=dict(type='scatter', mode='lines'), 
+                                             line=dict(color='white', dash='dash', width=1.5),
+                                             selector2=dict(name='lowess'))
                         fig_rel.update_layout(hovermode='x unified', yaxis_title="Return on Cost")
                         fig_rel.update_yaxes(tickformat=".1%")
                         fig_rel.update_xaxes(showspikes=True, spikemode='across', spikecolor='grey', spikesnap='cursor')
-                        st.plotly_chart(fig_rel, use_container_width=True, key="perf_chart_3")
-                        st.caption("**(Market Value − Cost) / Cost** at each date. Shows return on invested capital over time.")
+                        fig_rel.add_hline(y=0, line_dash="dash", line_color="grey", opacity=0.4)
+                        st.plotly_chart(fig_rel, use_container_width=True)
+                        st.caption("**(Market Value − Cost) / Cost** at each date. Dashed line = trend. Above 0% = in profit.")
 
                     with col[1]:
                         # Indexed performance: start at 100, show growth
@@ -488,7 +503,7 @@ with tabs[0]:
                         fig2.update_traces(line=dict(color='teal'))
                         fig2.update_layout(yaxis_title="Indexed Value", hovermode="x unified")
                         fig2.add_hline(y=100, line_dash="dash", line_color="grey", opacity=0.5)
-                        st.plotly_chart(fig2, use_container_width=True, key="perf_chart_4")
+                        st.plotly_chart(fig2, use_container_width=True)
                         st.caption("Portfolio value indexed to 100 at the start. Shows total growth factor regardless of invested amount.")
 
                     # ---------- Risk-Adjusted Performance ----------
@@ -512,7 +527,7 @@ with tabs[0]:
                     #     fig_cagr = px.bar(df_cagr, x='year', y='annual_cagr', text='annual_cagr',
                     #                       title="Annual Compound Growth Rate (CAGR)")
                     #     fig_cagr.update_traces(texttemplate='%{text:.2%}')
-                    #     st.plotly_chart(fig_cagr, use_container_width=True, key="perf_chart_5")
+                    #     st.plotly_chart(fig_cagr, use_container_width=True)
                     #     st.caption("Annual CAGR shown by calendar year. For short time spans (<3 years), interpret with caution.")
 
                     # # --- Rolling CAGR / Rolling Returns ---
@@ -524,7 +539,7 @@ with tabs[0]:
                     #     fig_rolling = px.line(df_rolling, x='date', y='cagr', 
                     #                           title=f"Rolling {cagr_window}Y CAGR")
                     #     fig_rolling.update_yaxes(tickformat=".2%")
-                    #     st.plotly_chart(fig_rolling, use_container_width=True, key="perf_chart_6")
+                    #     st.plotly_chart(fig_rolling, use_container_width=True)
                     #     st.caption(f"Rolling {cagr_window}-year CAGR: helps identify periods of outperformance/underperformance.")
 
                     # --- Drawdown chart ---
@@ -551,7 +566,7 @@ with tabs[0]:
                         fig_ann.update_layout(yaxis_title="Annual Return", showlegend=False, hovermode="x unified")
                         fig_ann.update_yaxes(tickformat=".1%")
                         fig_ann.update_traces(texttemplate='%{y:.1%}', textposition='outside')
-                        st.plotly_chart(fig_ann, use_container_width=True, key="perf_chart_7")
+                        st.plotly_chart(fig_ann, use_container_width=True)
                         st.caption("Year-on-year portfolio return based on market value change. Excludes cash flows within the year.")
 
                     # ── Rolling 12-month return ───────────────────────────────────────
@@ -574,7 +589,7 @@ with tabs[0]:
                         fig_roll.update_layout(yaxis_title="12-Month Return", hovermode="x unified")
                         fig_roll.update_yaxes(tickformat=".1%")
                         fig_roll.add_hline(y=0, line_dash="dash", line_color="grey", opacity=0.5)
-                        st.plotly_chart(fig_roll, use_container_width=True, key="perf_chart_8")
+                        st.plotly_chart(fig_roll, use_container_width=True)
                         st.caption("Return over the trailing 12 months at each date. Above zero = portfolio grew more than it lost in the prior year.")
 
                     # Drawdown based on market_value (portfolio worth), not net_value
@@ -583,11 +598,30 @@ with tabs[0]:
                     if not dd_df.empty:
                         dd_df['cum_max'] = dd_df['market_value'].cummax()
                         dd_df['drawdown'] = (dd_df['market_value'] - dd_df['cum_max']) / dd_df['cum_max']
-                        fig_dd = px.area(dd_df, x='date', y='drawdown', title="Portfolio Drawdown Over Time")
+                        # Drawup: % gain from previous trough
+                        dd_df['cum_min'] = dd_df['market_value'].cummin()
+                        dd_df['drawup'] = (dd_df['market_value'] - dd_df['cum_min']) / dd_df['cum_min'].replace(0, float('nan'))
+                        fig_dd = go.Figure()
+                        fig_dd.add_trace(go.Scatter(
+                            x=dd_df['date'], y=dd_df['drawdown'],
+                            name='Drawdown', fill='tozeroy',
+                            line=dict(color='red', width=1),
+                            fillcolor='rgba(255,0,0,0.2)'
+                        ))
+                        fig_dd.add_trace(go.Scatter(
+                            x=dd_df['date'], y=dd_df['drawup'],
+                            name='Drawup', fill='tozeroy',
+                            line=dict(color='green', width=1),
+                            fillcolor='rgba(0,200,0,0.15)'
+                        ))
+                        fig_dd.update_layout(
+                            title="Portfolio Drawdown & Drawup Over Time",
+                            hovermode='x unified', yaxis_title="% from peak/trough",
+                            xaxis=dict(showspikes=True, spikemode='across', spikecolor='grey')
+                        )
                         fig_dd.update_yaxes(tickformat=".1%")
-                        fig_dd.update_traces(line=dict(color='red'), fillcolor='rgba(255,0,0,0.2)')
-                        st.plotly_chart(fig_dd, use_container_width=True, key="perf_chart_9")
-                        st.caption("Drawdown = % drop from previous portfolio peak (market value). Highlights worst loss periods.")
+                        st.plotly_chart(fig_dd, use_container_width=True)
+                        st.caption("**Red** = % drop from previous peak. **Green** = % gain from previous trough. Asymmetry shows recovery strength.")
 
                      # --- Scatterplot / cluster-like grouping (performance groups) ---
                     scatter_df = h_filtered.copy()[['security_label','market_value','abs_perf','rel_perf','quantity','security_type']].copy()
@@ -645,7 +679,7 @@ with tabs[0]:
                             category_orders={'performance_group': present_categories}
                         )
                         fig_scatter.update_layout(legend_title_text="Perf Group")
-                        st.plotly_chart(fig_scatter, use_container_width=True, key="perf_chart_10")
+                        st.plotly_chart(fig_scatter, use_container_width=True)
                         st.caption("**Interpretation:** Colors = performance buckets (relative perf). Bubble size = exposure (abs market value).")
 
                         # --- Securities overview per group ---
@@ -880,7 +914,7 @@ with tabs[1]:
         )
         fig_year.update_traces(texttemplate='€%{text:,.2f}', textposition='outside')
         st.subheader("By Year")
-        st.plotly_chart(fig_year, use_container_width=True, key="perf_chart_11")
+        st.plotly_chart(fig_year, use_container_width=True)
 
         # --- 2. By Security (horizontal, stacked, scrollable) ---
         agg_sec = combined.groupby(['Security Label','Type'])['Amount'].sum().reset_index()
@@ -902,7 +936,7 @@ with tabs[1]:
         fig_sec.update_yaxes(tickangle=0, automargin=True)
         fig_sec.update_layout(height=chart_height, margin=dict(l=200, r=50, t=50, b=50))
         st.subheader("By Security")
-        st.plotly_chart(fig_sec, use_container_width=True, key="perf_chart_12")
+        st.plotly_chart(fig_sec, use_container_width=True)
 
         # --- 3. By Portfolio (stacked, sorted) ---
         agg_port = combined.groupby(['portfolio','Type'])['Amount'].sum().reset_index()
@@ -915,7 +949,7 @@ with tabs[1]:
         )
         fig_port.update_traces(texttemplate='€%{text:,.2f}', textposition='inside')
         st.subheader("By Portfolio")
-        st.plotly_chart(fig_port, use_container_width=True, key="perf_chart_13")
+        st.plotly_chart(fig_port, use_container_width=True)
 
         # --- Negative Capital Gains ---
         if not cgs.empty:
@@ -1223,7 +1257,7 @@ with tabs[2]:
                         title="Portfolio Allocation Over Time (by Asset Type)",
                         groupnorm="fraction"
                     )
-                    st.plotly_chart(fig_alloc, use_container_width=True, key="perf_chart_14")
+                    st.plotly_chart(fig_alloc, use_container_width=True)
 
                 # --- Asset Allocation Comparison (Actual vs Pre/Post Targets) ---
                 df_alloc = df_timeseries.groupby('security_type')['market_value'].sum()
@@ -1259,7 +1293,7 @@ with tabs[2]:
                     )
                     fig_alloc_compare.update_traces(textposition='outside')
                     fig_alloc_compare.update_layout(xaxis_title="Asset Type", yaxis_title="Weight")
-                    st.plotly_chart(fig_alloc_compare, use_container_width=True, key="perf_chart_15")
+                    st.plotly_chart(fig_alloc_compare, use_container_width=True)
 
                 # --- Sector Distribution Over Time ---
                 df_sector = df_timeseries.pivot_table(
@@ -1271,7 +1305,7 @@ with tabs[2]:
                         df_sector, x='date', y=df_sector.columns[1:],
                         title="Sector Allocation Over Time", groupnorm="fraction"
                     )
-                    st.plotly_chart(fig_sector, use_container_width=True, key="perf_chart_16")
+                    st.plotly_chart(fig_sector, use_container_width=True)
 
                     # --- Sector Comparison ---
                     df_sector_alloc = df_timeseries.groupby("sector")["market_value"].sum()
@@ -1305,7 +1339,7 @@ with tabs[2]:
                                 showarrow=False, yshift=10
                             )
                         fig_sector_compare.update_layout(xaxis_title="Sector", yaxis_title="Weight")
-                        st.plotly_chart(fig_sector_compare, use_container_width=True, key="perf_chart_17")
+                        st.plotly_chart(fig_sector_compare, use_container_width=True)
 
                 # --- Industry Distribution Over Time ---
                 df_ind = df_timeseries.pivot_table(
@@ -1317,7 +1351,7 @@ with tabs[2]:
                         df_ind, x='date', y=df_ind.columns[1:],
                         title="Industry Allocation Over Time", groupnorm="fraction"
                     )
-                    st.plotly_chart(fig_ind, use_container_width=True, key="perf_chart_18")
+                    st.plotly_chart(fig_ind, use_container_width=True)
 
                     # --- Industry Comparison ---
                     df_ind_alloc = df_timeseries.groupby("industry")["market_value"].sum()
@@ -1352,7 +1386,7 @@ with tabs[2]:
                                 showarrow=False, yshift=10
                             )
                         fig_ind_compare.update_layout(xaxis_title="Industry", yaxis_title="Weight")
-                        st.plotly_chart(fig_ind_compare, use_container_width=True, key="perf_chart_19")
+                        st.plotly_chart(fig_ind_compare, use_container_width=True)
 
                 # --- Top 10 Securities Over Time ---
                 top_secs = (
@@ -1377,7 +1411,7 @@ with tabs[2]:
                         title="Top 10 Securities Over Time", groupnorm="fraction"
                     )
                     fig_top.update_layout(legend_title="Security", legend=dict(itemsizing='constant'))
-                    st.plotly_chart(fig_top, use_container_width=True, key="perf_chart_20")
+                    st.plotly_chart(fig_top, use_container_width=True)
 
                     # --- Top 10 Securities Comparison (Actual only) with labels ---
                     df_sec_alloc = df_top.groupby("symbol")["market_value"].sum()
@@ -1399,7 +1433,7 @@ with tabs[2]:
                             xaxis_title="Security", yaxis_title="Weight",
                             xaxis=dict(showticklabels=True)
                         )
-                        st.plotly_chart(fig_sec_compare, use_container_width=True, key="perf_chart_21")
+                        st.plotly_chart(fig_sec_compare, use_container_width=True)
 
     with st.expander("Risk Evolution vs Targets"):
     
@@ -1472,32 +1506,32 @@ with tabs[2]:
                 mode="lines", name="Target Risk (Post-Retirement)",
                 line=dict(dash="dot", color="red")
             )
-            st.plotly_chart(fig_risk, use_container_width=True, key="perf_chart_22")
+            st.plotly_chart(fig_risk, use_container_width=True)
 
             # --- 2. Risk by Asset Type ---
             if "security_type" in df_risk_time.columns:
                 df_type = df_risk_time.pivot_table(index="date", columns="security_type", values="weighted_risk", aggfunc="sum").fillna(0.0)
                 fig_type = px.area(df_type.reset_index(), x="date", y=df_type.columns, title="Risk by Asset Type Over Time", groupnorm="fraction")
-                st.plotly_chart(fig_type, use_container_width=True, key="perf_chart_23")
+                st.plotly_chart(fig_type, use_container_width=True)
 
             # --- 3. Risk by Sector ---
             if "sector" in df_risk_time.columns and df_risk_time["sector"].notna().any():
                 df_sector = df_risk_time.pivot_table(index="date", columns="sector", values="weighted_risk", aggfunc="sum").fillna(0.0)
                 fig_sector = px.area(df_sector.reset_index(), x="date", y=df_sector.columns, title="Risk by Sector Over Time", groupnorm="fraction")
-                st.plotly_chart(fig_sector, use_container_width=True, key="perf_chart_24")
+                st.plotly_chart(fig_sector, use_container_width=True)
 
             # --- 4. Risk by Industry ---
             if "industry" in df_risk_time.columns and df_risk_time["industry"].notna().any():
                 df_ind = df_risk_time.pivot_table(index="date", columns="industry", values="weighted_risk", aggfunc="sum").fillna(0.0)
                 fig_ind = px.area(df_ind.reset_index(), x="date", y=df_ind.columns, title="Risk by Industry Over Time", groupnorm="fraction")
-                st.plotly_chart(fig_ind, use_container_width=True, key="perf_chart_25")
+                st.plotly_chart(fig_ind, use_container_width=True)
 
             # --- 5. Top Securities by Risk Contribution ---
             # top_secs = df_risk_time.groupby("symbol")["weighted_risk"].sum().nlargest(10).index
             # df_top = df_risk_time[df_risk_time["symbol"].isin(top_secs)]
             # df_top_pivot = df_top.pivot_table(index="date", columns="symbol", values="weighted_risk", aggfunc="sum").fillna(0.0)
             # fig_top = px.area(df_top_pivot.reset_index(), x="date", y=df_top_pivot.columns, title="Top 10 Securities Risk Contribution", groupnorm="fraction")
-            # st.plotly_chart(fig_top, use_container_width=True, key="perf_chart_26")
+            # st.plotly_chart(fig_top, use_container_width=True)
 
             # --- 5. Top Securities by Risk Contribution ---
             top_secs = df_risk_time.groupby("symbol")["weighted_risk"].sum().nlargest(10).index
@@ -1516,7 +1550,7 @@ with tabs[2]:
                 groupnorm="fraction"
             )
 
-            st.plotly_chart(fig_top, use_container_width=True, key="perf_chart_27")
+            st.plotly_chart(fig_top, use_container_width=True)
 
 
             # --- 6. Aggregate risk by category ---
@@ -1542,7 +1576,7 @@ with tabs[2]:
                     annotation_position="top left"
                 )
                 fig.update_layout(xaxis_title=category_col, yaxis_title="Risk (%)")
-                st.plotly_chart(fig, use_container_width=True, key="perf_chart_28")
+                st.plotly_chart(fig, use_container_width=True)
 
             plot_risk_by_category(df_risk_time, "security_type", "Risk by Asset Type")
             plot_risk_by_category(df_risk_time, "sector", "Risk by Sector")
@@ -1566,7 +1600,7 @@ with tabs[2]:
             )
             fig_heat.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
             fig_heat.update_layout(xaxis_title="Security", yaxis_title="Deviation (%)")
-            st.plotly_chart(fig_heat, use_container_width=True, key="perf_chart_29")
+            st.plotly_chart(fig_heat, use_container_width=True)
 
 
     # --- Fetch rebalancing suggestions ---
@@ -1814,7 +1848,7 @@ with tabs[3]:
 
         fig_price.update_layout(title="Price series with overlays", xaxis_title="Date", yaxis_title="Price",
                                 height=420, legend=dict(orientation="v", y=1, x=1.02))
-        st.plotly_chart(fig_price, use_container_width=True, key="perf_chart_30")
+        st.plotly_chart(fig_price, use_container_width=True)
 
         # --- Grouped expanders for all securities ---
         with st.expander("Candlestick Charts", expanded=False):
@@ -1826,7 +1860,7 @@ with tabs[3]:
                                                     open=dfp_sel['open'], high=dfp_sel['high'],
                                                     low=dfp_sel['low'], close=dfp_sel['close'],
                                                     name=lbl))
-            st.plotly_chart(fig_candle, use_container_width=True, key="perf_chart_31")
+            st.plotly_chart(fig_candle, use_container_width=True)
 
         with st.expander("RSI Charts", expanded=False):
             fig_rsi = go.Figure()
@@ -1843,7 +1877,7 @@ with tabs[3]:
                                              marker=dict(color='green', size=8), name=f"{lbl} 30↑"))
                 fig_rsi.add_trace(go.Scatter(x=crosses_down.index, y=crosses_down.values, mode='markers',
                                              marker=dict(color='red', size=8), name=f"{lbl} 70↓"))
-            st.plotly_chart(fig_rsi, use_container_width=True, key="perf_chart_32")
+            st.plotly_chart(fig_rsi, use_container_width=True)
 
         with st.expander("Return Distributions & Stats (Interactive)", expanded=False):
             for sym, dfp in series_map.items():
@@ -1909,7 +1943,7 @@ with tabs[3]:
                     showlegend=True
                 )
 
-                st.plotly_chart(fig, use_container_width=True, key="perf_chart_33")
+                st.plotly_chart(fig, use_container_width=True)
 
         with st.expander("Volume Charts", expanded=False):
             fig_vol = go.Figure()
@@ -1919,7 +1953,7 @@ with tabs[3]:
                 fig_vol.add_trace(go.Bar(x=dfp_sel.index, y=dfp_sel['volume'].fillna(0).astype(float),
                                          name=lbl, text=dfp_sel['volume'], textposition='outside'))
             fig_vol.update_layout(height=350)
-            st.plotly_chart(fig_vol, use_container_width=True, key="perf_chart_34")
+            st.plotly_chart(fig_vol, use_container_width=True)
 
     st.markdown("---")
 
@@ -2420,10 +2454,10 @@ with tabs[5]:
                 )
 
                 # --- Display charts ---
-                st.plotly_chart(fig_fee_avg, use_container_width=True, key="perf_chart_35")
-                st.plotly_chart(fig_fee_cum, use_container_width=True, key="perf_chart_36")
-                st.plotly_chart(fig_volume, use_container_width=True, key="perf_chart_37")
-                st.plotly_chart(fig_cum_area, use_container_width=True, key="perf_chart_38")
+                st.plotly_chart(fig_fee_avg, use_container_width=True)
+                st.plotly_chart(fig_fee_cum, use_container_width=True)
+                st.plotly_chart(fig_volume, use_container_width=True)
+                st.plotly_chart(fig_cum_area, use_container_width=True)
 
             else:
                 st.info("No transactions to analyze.")
