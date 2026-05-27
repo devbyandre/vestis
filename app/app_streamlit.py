@@ -420,6 +420,8 @@ with tabs[0]:
                     # Aggregate per date (deduplication handled in middleware.holdings_timeseries)
                     df_daily = df_ts.groupby('date')[['market_value','cost_basis','net_value']].sum().reset_index()
                     df_daily = df_daily.sort_values('date')
+                    # DEBUG — remove after confirming fix
+                    st.caption(f"DEBUG df_daily: rows={len(df_daily)}, last_mv={df_daily['market_value'].iloc[-1]:.0f}, last_cost={df_daily['cost_basis'].iloc[-1]:.0f}, max_mv={df_daily['market_value'].max():.0f}")
 
                     # ── Derived metrics ──────────────────────────────────────────────────
                     # rel_perf: (market_value - cost_basis) / cost_basis at each date
