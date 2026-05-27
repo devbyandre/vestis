@@ -612,8 +612,16 @@ with tabs[0]:
                         dd_df['cum_max'] = dd_df['market_value'].cummax()
                         dd_df['drawdown'] = (dd_df['market_value'] - dd_df['cum_max']) / dd_df['cum_max']
                         # Drawup: % gain from previous trough
-                        dd_df['cum_min'] = dd_df['market_value'].cummin()
-                        dd_df['drawup'] = (dd_df['market_value'] - dd_df['cum_min']) / dd_df['cum_min'].replace(0, float('nan'))
+                        # Drawup: % gain from the most recent local trough
+                        # Calculate rolling minimum over a lookback window (not all-time min)
+                        # to show recovery strength rather than total return from inception
+                        window = min(252, len(dd_df) // 4)  # ~1 year or quarter of data
+                        dd_df['rolling_min'] = dd_df['market_value'].rolling(window=window, min_periods=1).min()
+                        dd_df['drawup'] = np.where(
+                            dd_df['rolling_min'] > 0,
+                            (dd_df['market_value'] - dd_df['rolling_min']) / dd_df['rolling_min'],
+                            np.nan
+                        )
                         fig_dd = go.Figure()
                         fig_dd.add_trace(go.Scatter(
                             x=dd_df['date'], y=dd_df['drawdown'],
