@@ -1043,8 +1043,11 @@ def get_cashflow_payloads(symbol: str) -> pd.DataFrame:
 # Alerts
 # ═════════════════════════════════════════════════════════════════════════════
 
-def get_all_alerts() -> pd.DataFrame:
-    return _read_sql("""
+def get_all_alerts(active_only: bool = True) -> pd.DataFrame:
+    """Return alerts. By default only returns active alerts (active=1).
+    Pass active_only=False to get all alerts including inactive (for UI management)."""
+    where = "WHERE a.active=1" if active_only else ""
+    return _read_sql(f"""
         SELECT a.id, a.security_id,
                COALESCE(sc."longName", sc."shortName") AS security_name,
                s.yahoo_ticker AS symbol,
@@ -1054,6 +1057,7 @@ def get_all_alerts() -> pd.DataFrame:
         FROM alerts a
         LEFT JOIN securities_cache sc ON sc.security_id = a.security_id
         LEFT JOIN securities s ON s.id = a.security_id
+        {where}
         ORDER BY a.id DESC
     """)
 

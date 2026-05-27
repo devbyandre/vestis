@@ -2780,7 +2780,7 @@ with tabs[7]:
     st.header("Alerts Manager")
 
     # --- Fetch alerts ---
-    alerts = mw.get_alerts()
+    alerts = mw.get_all_alerts_for_ui()
     if alerts.empty:
         st.info("No alerts configured yet.")
     else:

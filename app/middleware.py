@@ -250,7 +250,13 @@ def add_split_transaction(symbol: str, split_date: str, ratio: float,
             int(pid), sec_id, split_date,
             tx_type='split', quantity=ratio, price=0.0, fees=0.0
         )
+        # Recompute holdings timeseries for this portfolio/security
         db.recompute_holdings_timeseries(int(pid), sec_id)
+        # Recompute risk timeseries so risk scores reflect split-adjusted quantities
+        try:
+            db.update_security_risk_timeseries(sec_id, portfolio_ids=[int(pid)])
+        except Exception:
+            logging.warning("Risk timeseries recompute failed for %s portfolio %s", symbol, pid)
         applied_portfolios.append(str(pid))
 
     # Clear split_pending alerts — user has now recorded it
@@ -960,8 +966,20 @@ def get_portfolio_symbols(portfolio_name: str) -> list:
 
 
 def get_alerts() -> pd.DataFrame:
-    """Return all alerts with security name for UI."""
-    df = db.get_all_alerts()
+    """Return ACTIVE alerts only — used by telegram worker for evaluation."""
+    df = db.get_all_alerts(active_only=True)
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "id", "security_id", "alert_type", "params",
+            "active", "notify_mode", "cooldown_seconds",
+            "last_evaluated", "last_triggered", "note", "auto_managed"
+        ])
+    return df
+
+
+def get_all_alerts_for_ui() -> pd.DataFrame:
+    """Return ALL alerts including inactive — used by the UI management page."""
+    df = db.get_all_alerts(active_only=False)
     if df.empty:
         return pd.DataFrame(columns=[
             "id", "security_id", "alert_type", "params",
