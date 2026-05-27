@@ -576,6 +576,17 @@ def list_transactions_detailed() -> pd.DataFrame:
         ORDER BY t.date DESC
     """)
 
+def get_first_buy_date(security_id: int):
+    """Return earliest buy date for this security across all portfolios, or None."""
+    df = _read_sql(
+        "SELECT MIN(date) as d FROM transactions WHERE security_id=? AND type='buy'",
+        (security_id,)
+    )
+    if df.empty or pd.isna(df.iloc[0]['d']):
+        return None
+    return str(df.iloc[0]['d'])[:10]
+
+
 def get_recorded_splits(security_id: int) -> list:
     """Return list of split dates already recorded as transactions for this security."""
     df = _read_sql(
