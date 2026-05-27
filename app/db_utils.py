@@ -590,11 +590,18 @@ def get_recorded_splits(security_id: int) -> list:
 def store_split_alert(security_id: int, split_date: str, ratio: float) -> None:
     """
     Store an unrecorded split alert so the Telegram worker can notify the user.
-    Uses the alerts_log table with a special alert_type marker.
-    Creates a placeholder alert if needed.
+    Skips if the split is already recorded in transactions OR if an alert already
+    exists for this split_date (active or inactive).
     """
-    # Check if we already have ANY split alert for this exact split_date (active or inactive)
-    # This prevents duplicate alerts being created every fetch cycle
+    # First check: is this split already recorded as a transaction?
+    recorded = get_recorded_splits(security_id)
+    recorded_dates = set(str(d)[:10] for d in recorded) if recorded else set()
+    if split_date in recorded_dates:
+        logging.debug("store_split_alert: split %s already recorded for security %s — skipping",
+                      split_date, security_id)
+        return
+
+    # Second check: is there already an alert for this split_date (active or inactive)?
     existing = _read_sql(
         "SELECT id FROM alerts WHERE security_id=? AND alert_type='split_pending' AND params LIKE ?",
         (security_id, f'%{split_date}%')

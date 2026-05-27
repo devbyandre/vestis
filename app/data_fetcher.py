@@ -316,11 +316,22 @@ def update_symbols(symbols: List[str], throttler: Throttler, force: bool = False
     if not symbols:
         return
 
-    # Compute earliest start date for batch fetch
+    # Compute start date for batch fetch:
+    # If force=True OR no price history exists, go back to the earliest transaction date
+    # so we get full historical data. Otherwise start from last stored price date.
     start_dates = {}
     for sym in symbols:
         latest_df = db.get_price_series(sym, None, "2100-01-01")
-        start_dates[sym] = latest_df["date"].max() if not latest_df.empty else None
+        if not latest_df.empty and not force:
+            start_dates[sym] = latest_df["date"].max()
+        else:
+            # No prices or forced — fetch from first transaction date (or 5 years back)
+            sec_id = db.get_security_id(sym)
+            first_buy = db.get_first_buy_date(sec_id) if sec_id else None
+            if first_buy:
+                start_dates[sym] = first_buy
+            else:
+                start_dates[sym] = (pd.Timestamp.now() - pd.Timedelta(days=365*5)).strftime("%Y-%m-%d")
 
     start_date = min([d for d in start_dates.values() if d is not None], default=None)
     logging.info("Starting batch price fetch for %d symbols", len(symbols))
