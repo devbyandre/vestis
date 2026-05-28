@@ -207,67 +207,25 @@ def apply_splits_to_transactions(df: pd.DataFrame) -> pd.DataFrame:
     return df[df[type_col].str.lower() != 'split'].copy()
 
 
-def add_split_transaction(symbol: str, split_date: str, ratio: float,
-                          portfolio_id: int = None) -> list:
+def add_split_transaction(portfolio_id: int, symbol: str, split_date: str, ratio: float) -> None:
     """
-    Record a stock split across ALL portfolios that have ever transacted this security.
-    ratio = new_shares / old_shares (e.g. 3.0 for 3-for-1, 0.5 for 1-for-2 reverse split).
-
-    Splits are recorded once per portfolio that holds/held the security so that
-    apply_splits_to_transactions() correctly adjusts FIFO lots in every portfolio.
-    After recording, any pending split_pending Telegram alerts are cleared.
-
-    Returns list of portfolio names the split was recorded in.
+    Record a stock split. ratio = new_shares / old_shares (e.g. 3.0 for 3-for-1).
+    Use 0.5 for a 1-for-2 reverse split.
+    All historical buy/sell quantities and prices are adjusted automatically
+    when holdings, FIFO gains, and dividends are calculated.
     """
     if ratio <= 0:
         raise ValueError(f"Split ratio must be positive, got {ratio}")
-
     sec_id = add_security(symbol)
-
-    # Find all portfolios that have ever transacted this security
-    tx_all = db.list_transactions_for_security_any_portfolio(sec_id)
-    portfolio_ids = []
-    if tx_all is not None and not tx_all.empty:
-        portfolio_ids = tx_all['portfolio_id'].dropna().unique().tolist()
-
-    # Fall back to the provided portfolio_id if nothing found
-    if not portfolio_ids and portfolio_id is not None:
-        portfolio_ids = [portfolio_id]
-
-    applied_portfolios = []
-    for pid in portfolio_ids:
-        # Check if split already recorded for this portfolio to avoid duplicates
-        existing = db.list_transactions_for_security(int(pid), sec_id)
-        already = False
-        if existing is not None and not existing.empty:
-            split_rows = existing[existing['type'].str.lower() == 'split']
-            if not split_rows.empty:
-                already = split_date in split_rows['date'].astype(str).str[:10].values
-        if already:
-            logging.info("Split already recorded for %s in portfolio %s — skipping", symbol, pid)
-            continue
-        db.insert_transaction(
-            int(pid), sec_id, split_date,
-            tx_type='split', quantity=ratio, price=0.0, fees=0.0
-        )
-        # Recompute holdings timeseries for this portfolio/security
-        db.recompute_holdings_timeseries(int(pid), sec_id)
-        # Recompute risk timeseries so risk scores reflect split-adjusted quantities
-        try:
-            db.update_security_risk_timeseries(sec_id, portfolio_ids=[int(pid)])
-        except Exception:
-            logging.warning("Risk timeseries recompute failed for %s portfolio %s", symbol, pid)
-        applied_portfolios.append(str(pid))
-
-    # Clear split_pending alerts — user has now recorded it
-    try:
-        db.clear_split_alert(sec_id)
-    except Exception:
-        logging.warning("Could not clear split_pending alerts for %s", symbol)
-
-    logging.info("Recorded split for %s: ratio=%.4f on %s in %d portfolio(s)",
-                 symbol, ratio, split_date, len(applied_portfolios))
-    return applied_portfolios
+    db.insert_transaction(
+        portfolio_id, sec_id, split_date,
+        tx_type='split',
+        quantity=ratio,
+        price=0.0,
+        fees=0.0,
+    )
+    db.recompute_holdings_timeseries(portfolio_id, sec_id)
+    logging.info("Recorded split for %s: ratio=%.4f on %s", symbol, ratio, split_date)
 
 
 def get_watchlist()-> pd.DataFrame:
@@ -1484,13 +1442,6 @@ def holdings_timeseries(
 
     if not aggregate:
         return df
-
-    # Deduplicate: if a security appears in multiple portfolios, sum across portfolios
-    # but only count each security once per date (avoids double-counting shared ETFs)
-    if 'security_id' in df.columns:
-        df = df.groupby(['date', 'security_id']).agg(
-            {'market_value': 'sum', 'cost_basis': 'sum'}
-        ).reset_index()
 
     # aggregate per date (all portfolios/securities combined)
     df_grouped = (

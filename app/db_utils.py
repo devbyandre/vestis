@@ -85,19 +85,11 @@ def _conn_ctx():
 
 def get_conn():
     """
-    Return a context-manager-compatible DBAPI connection.
+    Return a new DBAPI connection.
 
-    Always use as:  `with get_conn() as conn:`
-    Commit is automatic on success, rollback on exception.
-    Works for both SQLite (test) and PostgreSQL (production).
-    """
-    return _conn_ctx()
-
-
-def _raw_conn():
-    """
-    Return a raw DBAPI connection for functions that manage their own
-    commit/rollback/close lifecycle (the `own = conn is None` pattern).
+    Callers that use  `with get_conn() as conn:`  still work because psycopg2
+    and sqlite3 connections both support the context-manager protocol
+    (commit on __exit__ success, rollback on exception).
     """
     return _engine.raw_connection()
 
@@ -180,7 +172,7 @@ def insert_holdings_timeseries(records: list, conn=None) -> None:
 
     own = conn is None
     if own:
-        conn = _raw_conn()
+        conn = get_conn()
     try:
         cur = conn.cursor()
         cur.executemany(sql, records)
@@ -576,6 +568,17 @@ def list_transactions_detailed() -> pd.DataFrame:
         ORDER BY t.date DESC
     """)
 
+def get_first_buy_date(security_id: int):
+    """Return earliest buy date for this security across all portfolios, or None."""
+    df = _read_sql(
+        "SELECT MIN(date) as d FROM transactions WHERE security_id=? AND type='buy'",
+        (security_id,)
+    )
+    if df.empty or pd.isna(df.iloc[0]['d']):
+        return None
+    return str(df.iloc[0]['d'])[:10]
+
+
 def get_recorded_splits(security_id: int) -> list:
     """Return list of split dates already recorded as transactions for this security."""
     df = _read_sql(
@@ -590,21 +593,13 @@ def get_recorded_splits(security_id: int) -> list:
 def store_split_alert(security_id: int, split_date: str, ratio: float) -> None:
     """
     Store an unrecorded split alert so the Telegram worker can notify the user.
-    Skips if the split is already recorded in transactions OR if an alert already
-    exists for this split_date (active or inactive).
+    Uses the alerts_log table with a special alert_type marker.
+    Creates a placeholder alert if needed.
     """
-    # First check: is this split already recorded as a transaction?
-    recorded = get_recorded_splits(security_id)
-    recorded_dates = set(str(d)[:10] for d in recorded) if recorded else set()
-    if split_date in recorded_dates:
-        logging.debug("store_split_alert: split %s already recorded for security %s — skipping",
-                      split_date, security_id)
-        return
-
-    # Second check: is there already an alert for this split_date (active or inactive)?
+    # Check if we already have an active split alert for this security/date
     existing = _read_sql(
-        "SELECT id FROM alerts WHERE security_id=? AND alert_type='split_pending' AND params LIKE ?",
-        (security_id, f'%{split_date}%')
+        "SELECT id FROM alerts WHERE security_id=? AND alert_type='split_pending' AND active=1",
+        (security_id,)
     )
     if existing.empty:
         # Create a split_pending alert (not subject to normal cooldown — fires until resolved)
@@ -1051,8 +1046,8 @@ def get_cashflow_payloads(symbol: str) -> pd.DataFrame:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def get_all_alerts(active_only: bool = True) -> pd.DataFrame:
-    """Return alerts. By default only returns active alerts (active=1).
-    Pass active_only=False to get all alerts including inactive (for UI management)."""
+    """Return alerts. active_only=True (default) returns only active alerts.
+    Pass active_only=False to get all including inactive (for UI management)."""
     where = "WHERE a.active=1" if active_only else ""
     return _read_sql(f"""
         SELECT a.id, a.security_id,
@@ -1251,7 +1246,7 @@ def list_prices_for_security(security_id: int, start_date: str, end_date: str) -
 def clear_holdings_timeseries(security_id: int, portfolio_id: Optional[int] = None, conn=None):
     own = conn is None
     if own:
-        conn = _raw_conn()
+        conn = get_conn()
     cur = conn.cursor()
     if portfolio_id is not None:
         cur.execute(
@@ -1332,7 +1327,7 @@ def get_holdings_timeseries(
 """ def recompute_holdings_timeseries(portfolio_id: int, security_id: int, conn=None) -> None:
     own = conn is None
     if own:
-        conn = _raw_conn()
+        conn = get_conn()
     try:
         df_tx = list_transactions_for_security(portfolio_id, security_id)
         if df_tx.empty:
@@ -1408,7 +1403,7 @@ def get_holdings_timeseries(
 def recompute_holdings_timeseries(portfolio_id: int, security_id: int, conn=None) -> None:
     own = conn is None
     if own:
-        conn = _raw_conn()
+        conn = get_conn()
     try:
         df_tx = list_transactions_for_security(portfolio_id, security_id)
         if df_tx.empty:
@@ -1522,7 +1517,7 @@ def get_security_risk_timeseries(security_id: int, start_date=None, end_date=Non
 def update_security_risk_timeseries(security_id: int, portfolio_ids=None, conn=None):
     own = conn is None
     if own:
-        conn = _raw_conn()
+        conn = get_conn()
     try:
         sec = get_security_by_id(int(security_id))
         if not sec:
@@ -1597,7 +1592,7 @@ def update_security_risk_timeseries(security_id: int, portfolio_ids=None, conn=N
 def delete_security_risk_timeseries(security_id: int, conn=None):
     own = conn is None
     if own:
-        conn = _raw_conn()
+        conn = get_conn()
     conn.cursor().execute(
         _adapt_sql("DELETE FROM security_risk_timeseries WHERE security_id=?"), (security_id,)
     )

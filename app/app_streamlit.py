@@ -415,109 +415,69 @@ with tabs[0]:
                     df_ts['cost_basis'] = pd.to_numeric(df_ts['cost_basis'], errors='coerce').fillna(0.0)
                     df_ts['net_value'] = df_ts['market_value'] - df_ts['cost_basis']
 
-                    # Aggregate per date (deduplication handled in middleware.holdings_timeseries)
+                    # Aggregate per date (in case multiple securities/portfolios included)
                     df_daily = df_ts.groupby('date')[['market_value','cost_basis','net_value']].sum().reset_index()
                     df_daily = df_daily.sort_values('date')
+                    df_daily['cum_market'] = df_daily['market_value'].cumsum()
+                    df_daily['cum_net'] = df_daily['net_value'].cumsum()
+                    df_daily['cum_rel_perf'] = df_daily['cum_net'] / df_daily['cost_basis'].cumsum().replace({0: np.nan})
 
-                    # ── Derived metrics ──────────────────────────────────────────────────
-                    # rel_perf: (market_value - cost_basis) / cost_basis at each date
-                    # This is a snapshot ratio, not a cumsum — each row is the full portfolio state
-                    df_daily['rel_perf'] = np.where(
-                        df_daily['cost_basis'] > 0,
-                        (df_daily['market_value'] - df_daily['cost_basis']) / df_daily['cost_basis'],
-                        np.nan
-                    )
+                    # Instantaneous relative performance (per date) = net / cost at that date
+                    df_daily['rel_perf_inst'] = np.where(df_daily['cost_basis'] != 0, (df_daily['market_value'] - df_daily['cost_basis']) / df_daily['cost_basis'], np.nan)
 
-                    # cost_invested: tracks how much capital has been deployed over time
-                    # Use cost_basis directly — it already represents total invested cost at each date
-                    df_daily['cost_invested'] = df_daily['cost_basis']
-
-                    import plotly.graph_objects as go
                     col = st.columns(2)
                     with col[0]:
-                        # Market value vs cost basis — use go.Scatter to avoid px.area stacking
-                        # px.area with multiple y-series stacks them (mv + cost = wrong total)
-                        fig_mn = go.Figure()
-                        fig_mn.add_trace(go.Scatter(
-                            x=df_daily['date'], y=df_daily['market_value'],
-                            name='Market Value', fill='tozeroy',
-                            line=dict(color='#4C72B0', width=1.5),
-                            fillcolor='rgba(76,114,176,0.3)'
-                        ))
-                        fig_mn.add_trace(go.Scatter(
-                            x=df_daily['date'], y=df_daily['cost_basis'],
-                            name='Cost Basis', fill='tozeroy',
-                            line=dict(color='#DD8452', width=1.5),
-                            fillcolor='rgba(221,132,82,0.4)'
-                        ))
-                        fig_mn.update_layout(
-                            title="Portfolio Value vs Cost Basis Over Time",
-                            hovermode='x unified', yaxis_title="Value (€)",
-                            xaxis=dict(showspikes=True, spikemode='across', spikecolor='grey')
+                        # Chart: market_value and net_value (NOT cumsum) — final value should match snapshot
+                        fig_mn = px.area(
+                            df_daily,
+                            x='date',
+                            y=['net_value', 'market_value'],
+                            labels={'value': '€', 'variable': 'Value Type', 'date': 'Date'},
+                            title="Market Value and Net Value Over Time (market_value vs market_value - cost_basis)"
                         )
+                        # colors & visual hints
+                        fig_mn.update_traces(selector=dict(name='net_value'), line=dict(color='green'), opacity=0.8)
+                        fig_mn.update_traces(selector=dict(name='market_value'), line=dict(color='blue'), opacity=0.6)
+                        # show vertical spike on hover to compare
+                        fig_mn.update_xaxes(showspikes=True, spikemode='across', spikecolor='grey', spikesnap='cursor')
+                        fig_mn.update_layout(hovermode='x unified', yaxis_title="Value (€)")
                         st.plotly_chart(fig_mn, use_container_width=True)
-                        st.caption("**Market value** (blue) = current portfolio worth. **Cost basis** (orange) = total invested capital. Gap between them = unrealised profit/loss.")
+                        st.caption("**Interpretation:** Market value is your portfolio's total quoted value at each date. Net value = market value − cost basis (the realized/unrealized profit). The last datapoint for Market Value should match the snapshot Market Value above.")
 
                     with col[1]:
-                        # Net P&L over time (market_value - cost_basis)
+                        # --- Chart: cumulative net (bottom) and cumulative market (top) overlapping ---
                         fig1 = px.area(
                             df_daily,
                             x='date',
-                            y='net_value',
-                            labels={'net_value': 'Net P&L (€)', 'date': 'Date'},
-                            title="Net P&L Over Time (Market Value − Cost Basis)"
+                            y=['cum_net','cum_market'],
+                            labels={'value':'€','variable':'Value Type','date':'Date'},
+                            title="Cumulative Net Value (bottom) and Cumulative Market Value (top)"
                         )
-                        fig1.update_traces(line=dict(color='green'))
-                        fig1.update_layout(yaxis_title="Net P&L (€)", hovermode="x unified")
+                        # Make colors and overlapping appearance clearer by editing traces
+                        fig1.update_traces(selector=dict(name='cum_net'), line=dict(color='green'))
+                        fig1.update_traces(selector=dict(name='cum_market'), line=dict(color='blue'), opacity=0.6)
+                        fig1.update_layout(yaxis_title="Value (€)", xaxis_title="Date", hovermode="x unified")
                         st.plotly_chart(fig1, use_container_width=True)
-                        st.caption("Unrealised profit/loss at each point in time. Positive = in profit, negative = underwater.")
-
+                        st.caption("Market value vs Net profit. Shows how invested capital and gains evolve over time.")
+                    
                     col = st.columns(2)
                     with col[0]:
-                        # Relative performance over time
-                        fig_rel = go.Figure()
-                        fig_rel.add_trace(go.Scatter(
-                            x=df_daily['date'], y=df_daily['rel_perf'],
-                            name='Rel Performance', mode='lines',
-                            line=dict(color='purple', width=1.5)
-                        ))
-                        # Add LOWESS trendline via scipy
-                        try:
-                            from scipy.stats import linregress
-                            x_num = np.arange(len(df_daily))
-                            valid = df_daily['rel_perf'].notna()
-                            slope, intercept, _, _, _ = linregress(x_num[valid], df_daily['rel_perf'][valid])
-                            trend = slope * x_num + intercept
-                            fig_rel.add_trace(go.Scatter(
-                                x=df_daily['date'], y=trend,
-                                name='Trend', mode='lines',
-                                line=dict(color='white', dash='dash', width=1.5)
-                            ))
-                        except Exception:
-                            pass
-                        fig_rel.add_hline(y=0, line_dash="dot", line_color="grey", opacity=0.4)
-                        fig_rel.update_layout(
-                            title="Relative Performance Over Time",
-                            hovermode='x unified', yaxis_title="Return on Cost",
-                            xaxis=dict(showspikes=True, spikemode='across', spikecolor='grey')
-                        )
-                        fig_rel.update_yaxes(tickformat=".1%")
+                        # Chart: Relative Performance over time (instantaneous) — ends at snapshot rel perf
+                        fig_rel = px.line(df_daily, x='date', y='rel_perf_inst', title="Relative Performance Over Time")
+                        fig_rel.update_layout(hovermode='x unified', yaxis_title="Rel Perf (ratio)")
+                        fig_rel.update_xaxes(showspikes=True, spikemode='across', spikecolor='grey', spikesnap='cursor')
                         st.plotly_chart(fig_rel, use_container_width=True)
-                        st.caption("**(Market Value − Cost) / Cost** at each date. Dashed = linear trend. Above 0% = in profit.")
+                        st.caption("**Interpretation:** This shows the portfolio performance relative to the invested cost at each date. The final point equals the snapshot relative performance.")
+
 
                     with col[1]:
-                        # Indexed performance: start at 100, show growth
-                        first_mv = df_daily['market_value'].replace(0, np.nan).dropna().iloc[0] if not df_daily.empty else 1
-                        df_daily['indexed'] = df_daily['market_value'] / first_mv * 100
-                        fig2 = px.line(
-                            df_daily, x='date', y='indexed',
-                            title="Indexed Portfolio Value (Base = 100)"
-                        )
-                        fig2.update_traces(line=dict(color='teal'))
-                        fig2.update_layout(yaxis_title="Indexed Value", hovermode="x unified")
-                        fig2.add_hline(y=100, line_dash="dash", line_color="grey", opacity=0.5)
+                        # --- Chart: cumulative relative performance ---
+                        fig2 = px.area(df_daily, x='date', y='cum_rel_perf',
+                                       labels={'cum_rel_perf':'Cumulative Rel Perf (ratio)'},
+                                       title="Cumulative Relative Performance (cum_net / cum_cost)")
+                        fig2.update_xaxes(showspikes=True, spikemode='across', spikecolor='grey', spikesnap='cursor')
                         st.plotly_chart(fig2, use_container_width=True)
-                        st.caption("Portfolio value indexed to 100 at the start. Shows total growth factor regardless of invested amount.")
+                        st.caption("Cumulative relative performance. Ratio of profit vs invested cost basis.")
 
                     # ---------- Risk-Adjusted Performance ----------
 
@@ -556,93 +516,12 @@ with tabs[0]:
                     #     st.caption(f"Rolling {cagr_window}-year CAGR: helps identify periods of outperformance/underperformance.")
 
                     # --- Drawdown chart ---
-                    # ── Annual return bar chart ──────────────────────────────────
-                    df_annual = df_daily.copy()
-                    df_annual['year'] = pd.to_datetime(df_annual['date']).dt.year
-                    # Last market_value and cost_basis per year
-                    yr = df_annual.groupby('year').last().reset_index()
-                    yr['prev_mv'] = yr['market_value'].shift(1)
-                    yr['annual_return'] = np.where(
-                        yr['prev_mv'] > 0,
-                        (yr['market_value'] - yr['prev_mv']) / yr['prev_mv'],
-                        np.nan
-                    )
-                    yr = yr.dropna(subset=['annual_return'])
-                    if not yr.empty:
-                        yr['color'] = yr['annual_return'].apply(lambda x: 'green' if x >= 0 else 'red')
-                        fig_ann = px.bar(
-                            yr, x='year', y='annual_return',
-                            color='color',
-                            color_discrete_map={'green': '#26a641', 'red': '#e05252'},
-                            title="Annual Portfolio Return by Year"
-                        )
-                        fig_ann.update_layout(yaxis_title="Annual Return", showlegend=False, hovermode="x unified")
-                        fig_ann.update_yaxes(tickformat=".1%")
-                        fig_ann.update_traces(texttemplate='%{y:.1%}', textposition='outside')
-                        st.plotly_chart(fig_ann, use_container_width=True)
-                        st.caption("Year-on-year portfolio return based on market value change. Excludes cash flows within the year.")
-
-                    # ── Rolling 12-month return ───────────────────────────────────────
-                    df_roll = df_daily.copy()
-                    df_roll['date'] = pd.to_datetime(df_roll['date'])
-                    df_roll = df_roll.set_index('date').sort_index()
-                    df_roll['mv_12m_ago'] = df_roll['market_value'].shift(252)  # ~252 trading days
-                    df_roll['rolling_12m'] = np.where(
-                        df_roll['mv_12m_ago'] > 0,
-                        (df_roll['market_value'] - df_roll['mv_12m_ago']) / df_roll['mv_12m_ago'],
-                        np.nan
-                    )
-                    df_roll = df_roll.dropna(subset=['rolling_12m']).reset_index()
-                    if not df_roll.empty:
-                        fig_roll = px.line(
-                            df_roll, x='date', y='rolling_12m',
-                            title="Rolling 12-Month Return"
-                        )
-                        fig_roll.update_traces(line=dict(color='#f0a500'))
-                        fig_roll.update_layout(yaxis_title="12-Month Return", hovermode="x unified")
-                        fig_roll.update_yaxes(tickformat=".1%")
-                        fig_roll.add_hline(y=0, line_dash="dash", line_color="grey", opacity=0.5)
-                        st.plotly_chart(fig_roll, use_container_width=True)
-                        st.caption("Return over the trailing 12 months at each date. Above zero = portfolio grew more than it lost in the prior year.")
-
-                    # Drawdown based on market_value (portfolio worth), not net_value
-                    # Filter to rows where market_value > 0 to avoid division issues
-                    dd_df = df_daily[df_daily['market_value'] > 0].copy()
-                    if not dd_df.empty:
-                        dd_df['cum_max'] = dd_df['market_value'].cummax()
-                        dd_df['drawdown'] = (dd_df['market_value'] - dd_df['cum_max']) / dd_df['cum_max']
-                        # Drawup: % gain from previous trough
-                        # Drawup: % gain from the most recent local trough
-                        # Calculate rolling minimum over a lookback window (not all-time min)
-                        # to show recovery strength rather than total return from inception
-                        window = min(252, len(dd_df) // 4)  # ~1 year or quarter of data
-                        dd_df['rolling_min'] = dd_df['market_value'].rolling(window=window, min_periods=1).min()
-                        dd_df['drawup'] = np.where(
-                            dd_df['rolling_min'] > 0,
-                            (dd_df['market_value'] - dd_df['rolling_min']) / dd_df['rolling_min'],
-                            np.nan
-                        )
-                        fig_dd = go.Figure()
-                        fig_dd.add_trace(go.Scatter(
-                            x=dd_df['date'], y=dd_df['drawdown'],
-                            name='Drawdown', fill='tozeroy',
-                            line=dict(color='red', width=1),
-                            fillcolor='rgba(255,0,0,0.2)'
-                        ))
-                        fig_dd.add_trace(go.Scatter(
-                            x=dd_df['date'], y=dd_df['drawup'],
-                            name='Drawup', fill='tozeroy',
-                            line=dict(color='green', width=1),
-                            fillcolor='rgba(0,200,0,0.15)'
-                        ))
-                        fig_dd.update_layout(
-                            title="Portfolio Drawdown & Drawup Over Time",
-                            hovermode='x unified', yaxis_title="% from peak/trough",
-                            xaxis=dict(showspikes=True, spikemode='across', spikecolor='grey')
-                        )
-                        fig_dd.update_yaxes(tickformat=".1%")
-                        st.plotly_chart(fig_dd, use_container_width=True)
-                        st.caption("**Red** = % drop from previous peak. **Green** = % gain from previous trough. Asymmetry shows recovery strength.")
+                    df_daily['cum_max'] = df_daily['net_value'].cummax()
+                    df_daily['drawdown'] = (df_daily['net_value'] - df_daily['cum_max']) / df_daily['cum_max']
+                    fig_dd = px.area(df_daily, x='date', y='drawdown', title="Portfolio Drawdown Over Time")
+                    fig_dd.update_yaxes(tickformat=".2%")
+                    st.plotly_chart(fig_dd, use_container_width=True)
+                    st.caption("Drawdown = percentage drop from previous peak. Highlights max risk exposure during downturns.")
 
                      # --- Scatterplot / cluster-like grouping (performance groups) ---
                     scatter_df = h_filtered.copy()[['security_label','market_value','abs_perf','rel_perf','quantity','security_type']].copy()
@@ -2655,10 +2534,24 @@ with tabs[5]:
             tx_new_port = st.text_input("New portfolio name (if creating)", disabled=not is_new_port)
 
             tx_date = st.date_input("Date", value=dt.date.today(), key="tx_one_date")
-            tx_type = st.selectbox("Type", ["buy", "sell"], key="tx_one_type")
-            tx_qty = st.number_input("Quantity (shares)", min_value=0.0, value=1.0, step=1.0, format="%.5f")
-            tx_amount = st.number_input("Price per share (leave 0 to use latest price)", min_value=0.0, value=0.0, format="%.3f")
-            tx_fees = st.number_input("Fees", min_value=0.0, value=0.0)
+            #tx_type = st.selectbox("Type", ["buy", "sell"], key="tx_one_type")
+            tx_type = st.selectbox("Type", ["buy", "sell", "split"], key="tx_one_type")
+
+            if tx_type == "split":
+                st.info("📌 A **stock split** adjusts all historical buy/sell quantities and prices automatically. No tax event is triggered.")
+                tx_split_ratio = st.number_input(
+                    "Split ratio (new shares ÷ old shares)",
+                    min_value=0.01, value=2.0, step=0.5, format="%.4f",
+                    help="e.g. enter 3.0 for a 3-for-1 split, 0.5 for a 1-for-2 reverse split",
+                    key="tx_split_ratio"
+                )
+                tx_qty = tx_split_ratio
+                tx_amount = 0.0
+                tx_fees = 0.0
+            else:
+                tx_qty = st.number_input("Quantity (shares)", min_value=0.0, value=1.0, step=1.0, format="%.5f")
+                tx_amount = st.number_input("Price per share (leave 0 to use latest price)", min_value=0.0, value=0.0, format="%.3f")
+                tx_fees = st.number_input("Fees", min_value=0.0, value=0.0)
 
             tx_submit = st.form_submit_button("Add transaction")
 
@@ -2682,8 +2575,9 @@ with tabs[5]:
 
                 # Handle new security creation
                 if selected_label == "--- create new security ---":
-                    mw.add_security(tx_symbol, tx_name_input, tx_isin)
+                    mw.add_security(tx_symbol, tx_name_input, tx_isin)  # implement in mw/db
                 else:
+                    # ensure security exists in DB
                     sec_row = db.get_security_by_symbol(tx_symbol)
                     if not sec_row:
                         mw.add_security(tx_symbol, tx_name_input, tx_isin)
@@ -2696,75 +2590,32 @@ with tabs[5]:
                         st.error(f"No price available for {tx_symbol}")
                         st.stop()
 
-                mw.add_transaction(
-                    portfolio_id=portfolio_id,
-                    symbol=tx_symbol,
-                    tx_date=tx_date.isoformat(),
-                    tx_type=tx_type,
-                    quantity=tx_qty,
-                    price=price_to_use,
-                    fees=tx_fees
-                )
-                st.success("Transaction added")
+                # Add transaction
+                if tx_type == "split":
+                    mw.add_split_transaction(
+                        portfolio_id=portfolio_id,
+                        symbol=tx_symbol,
+                        split_date=tx_date.isoformat(),
+                        ratio=tx_split_ratio
+                    )
+                    st.success(f"Split recorded for {tx_symbol} (ratio {tx_split_ratio:.4f}). Holdings have been recomputed.")
+                else:
+                    mw.add_transaction(
+                        portfolio_id=portfolio_id,
+                        symbol=tx_symbol,
+                        tx_date=tx_date.isoformat(),
+                        tx_type=tx_type,
+                        quantity=tx_qty,
+                        price=price_to_use,
+                        fees=tx_fees
+                    )
+                    st.success("Transaction added")
                 st.rerun()
 
     st.divider()
 
-    # ── Record Stock Split ────────────────────────────────────────────────────
-    with st.expander("🔀 Record Stock Split", expanded=False):
-        st.markdown(
-            "Record a stock split to automatically adjust all historical buy/sell "
-            "quantities and prices. **No tax event is triggered.**"
-        )
-        st.markdown("The split is applied across **all portfolios** that hold or have held this security.")
 
-        with st.form("split_form"):
-            # Security selector — reuse same security list
-            all_sec = mw.get_all_securities()
-            split_sec_options = ["--- select security ---"]
-            if not all_sec.empty:
-                split_sec_options += [
-                    f"{row['name']} ({row['symbol']})" if row.get('name') else row['symbol']
-                    for _, row in all_sec.iterrows()
-                ]
-            split_sec_label = st.selectbox("Security", split_sec_options, key="split_sec_label")
-            split_symbol = ""
-            if split_sec_label != "--- select security ---":
-                # Extract ticker — last part in parentheses
-                split_symbol = split_sec_label.split("(")[-1].rstrip(")")
-
-            split_date = st.date_input("Split date", value=dt.date.today(), key="split_date")
-            split_ratio = st.number_input(
-                "Split ratio (new shares ÷ old shares)",
-                min_value=0.01, value=2.0, step=0.5, format="%.4f",
-                help="3.0 = 3-for-1 split (you get 3× shares at ⅓ price) · 0.5 = 1-for-2 reverse split"
-            )
-
-            col1, col2 = st.columns(2)
-            col1.metric("Example: shares before", "10")
-            col2.metric("Example: shares after", f"{10 * split_ratio:.0f}")
-
-            split_submit = st.form_submit_button("Record Split")
-
-            if split_submit:
-                if not split_symbol:
-                    st.error("Please select a security.")
-                    st.stop()
-                applied = mw.add_split_transaction(
-                    symbol=split_symbol,
-                    split_date=split_date.isoformat(),
-                    ratio=split_ratio,
-                )
-                n = len(applied) if applied else 1
-                st.success(
-                    f"✅ Split ×{split_ratio:.4f} recorded for **{split_symbol}** "
-                    f"across {n} portfolio(s). Holdings have been recomputed."
-                )
-                st.rerun()
-
-    st.divider()
-
-    # --- Manage portfolios ---
+    # --- Manage portfolios ---   
     st.subheader("Manage Portfolios")
 
     with st.expander("Portfolio Management", expanded=False):
@@ -2901,7 +2752,10 @@ with tabs[7]:
     st.header("Alerts Manager")
 
     # --- Fetch alerts ---
+    # Use get_all_alerts_for_ui to show all alerts including inactive for management
+    # But filter out split_pending — those are system-managed and shown separately
     alerts = mw.get_all_alerts_for_ui()
+    alerts = alerts[alerts['alert_type'] != 'split_pending'] if not alerts.empty else alerts
     if alerts.empty:
         st.info("No alerts configured yet.")
     else:
