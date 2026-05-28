@@ -2752,8 +2752,6 @@ with tabs[7]:
     st.header("Alerts Manager")
 
     # --- Fetch alerts ---
-    # Use get_all_alerts_for_ui to show all alerts including inactive for management
-    # But filter out split_pending — those are system-managed and shown separately
     alerts = mw.get_all_alerts_for_ui()
     alerts = alerts[alerts['alert_type'] != 'split_pending'] if not alerts.empty else alerts
     if alerts.empty:
@@ -2761,17 +2759,24 @@ with tabs[7]:
     else:
         # --- Filter expander ---
         with st.expander("Filters", expanded=False):
-            # Security filter
-            sec_labels = [format_sec_label(row['symbol']) for _, row in alerts.iterrows()]
-            sel_secs = st.multiselect("Select securities", options=sorted(sec_labels), default=[])
-            sel_sec_ids = [row['security_id'] for i, row in alerts.iterrows() if format_sec_label(row['symbol']) in sel_secs] if sel_secs else None
+            # Security filter — deduplicated
+            unique_syms = sorted(set(
+                format_sec_label(row['symbol'])
+                for _, row in alerts.iterrows()
+                if pd.notna(row.get('symbol'))
+            ))
+            sel_secs = st.multiselect("Select securities", options=unique_syms, default=[])
+            sel_sec_ids = (
+                alerts[alerts['symbol'].apply(format_sec_label).isin(sel_secs)]['security_id'].unique().tolist()
+                if sel_secs else None
+            )
 
             # Alert type filter
             alert_types = sorted(alerts['alert_type'].dropna().unique().tolist())
             sel_types = st.multiselect("Alert types", options=alert_types, default=[])
 
             # Active / inactive filter
-            sel_active = st.multiselect("Status", options=["Active","Inactive"], default=[])
+            sel_active = st.multiselect("Status", options=["Active","Inactive"], default=["Active"])
 
         # --- Apply filters ---
         df_filtered = alerts.copy()
@@ -2780,9 +2785,9 @@ with tabs[7]:
         if sel_types:
             df_filtered = df_filtered[df_filtered['alert_type'].isin(sel_types)]
         if sel_active:
-            active_map = {"Active": True, "Inactive": False}
-            selected_bool = [active_map[s] for s in sel_active]
-            df_filtered = df_filtered[df_filtered['active'].isin(selected_bool)]
+            active_map = {"Active": 1, "Inactive": 0}
+            selected_vals = [active_map[s] for s in sel_active]
+            df_filtered = df_filtered[df_filtered['active'].isin(selected_vals)]
 
 
         # --- Description at bottom in collapsible info box ---
@@ -2798,7 +2803,14 @@ with tabs[7]:
             """)
 
 
-        st.subheader(f"Showing {len(df_filtered)} Alerts")
+        # Pagination
+        ALERT_PAGE_SIZE = 15
+        al_total = len(df_filtered)
+        al_pages = max(1, (al_total + ALERT_PAGE_SIZE - 1) // ALERT_PAGE_SIZE)
+        al_page = st.number_input("Alerts page", min_value=1, max_value=al_pages, value=1, step=1,
+                                   key="al_page", label_visibility="collapsed") if al_pages > 1 else 1
+        st.subheader(f"Showing {min(ALERT_PAGE_SIZE, al_total)} of {al_total} Alerts — page {al_page}/{al_pages}")
+        df_filtered = df_filtered.iloc[(al_page-1)*ALERT_PAGE_SIZE : al_page*ALERT_PAGE_SIZE].copy()
 
         # --- Alerts List in expander ---
         # with st.expander("Alerts List", expanded=True):
