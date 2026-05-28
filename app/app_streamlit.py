@@ -409,119 +409,204 @@ with tabs[0]:
                 st.subheader("Performance")
             
                 with st.expander("Deeper Performance Analysis", expanded=False):
+                    import plotly.graph_objects as go
+
                     # Ensure sorting & numeric
                     df_ts = df_ts.sort_values('date').reset_index(drop=True)
                     df_ts['market_value'] = pd.to_numeric(df_ts['market_value'], errors='coerce').fillna(0.0)
-                    df_ts['cost_basis'] = pd.to_numeric(df_ts['cost_basis'], errors='coerce').fillna(0.0)
-                    df_ts['net_value'] = df_ts['market_value'] - df_ts['cost_basis']
+                    df_ts['cost_basis']   = pd.to_numeric(df_ts['cost_basis'],   errors='coerce').fillna(0.0)
+                    df_ts['net_value']    = df_ts['market_value'] - df_ts['cost_basis']
 
-                    # Aggregate per date (in case multiple securities/portfolios included)
+                    # Aggregate per date — deduplication handled in middleware.holdings_timeseries
                     df_daily = df_ts.groupby('date')[['market_value','cost_basis','net_value']].sum().reset_index()
                     df_daily = df_daily.sort_values('date')
-                    df_daily['cum_market'] = df_daily['market_value'].cumsum()
-                    df_daily['cum_net'] = df_daily['net_value'].cumsum()
-                    df_daily['cum_rel_perf'] = df_daily['cum_net'] / df_daily['cost_basis'].cumsum().replace({0: np.nan})
 
-                    # Instantaneous relative performance (per date) = net / cost at that date
-                    df_daily['rel_perf_inst'] = np.where(df_daily['cost_basis'] != 0, (df_daily['market_value'] - df_daily['cost_basis']) / df_daily['cost_basis'], np.nan)
+                    # ── Derived metrics ───────────────────────────────────────────────
+                    df_daily['rel_perf'] = np.where(
+                        df_daily['cost_basis'] > 0,
+                        (df_daily['market_value'] - df_daily['cost_basis']) / df_daily['cost_basis'],
+                        np.nan
+                    )
+                    first_mv = df_daily['market_value'].replace(0, np.nan).dropna().iloc[0] if not df_daily.empty else 1
+                    df_daily['indexed'] = df_daily['market_value'] / first_mv * 100
 
+                    # ── Chart 1: Portfolio Value vs Cost Basis ────────────────────────
                     col = st.columns(2)
                     with col[0]:
-                        # Chart: market_value and net_value (NOT cumsum) — final value should match snapshot
-                        fig_mn = px.area(
-                            df_daily,
-                            x='date',
-                            y=['net_value', 'market_value'],
-                            labels={'value': '€', 'variable': 'Value Type', 'date': 'Date'},
-                            title="Market Value and Net Value Over Time (market_value vs market_value - cost_basis)"
+                        fig_mn = go.Figure()
+                        fig_mn.add_trace(go.Scatter(
+                            x=df_daily['date'], y=df_daily['market_value'],
+                            name='Market Value', fill='tozeroy',
+                            line=dict(color='#4C72B0', width=1.5),
+                            fillcolor='rgba(76,114,176,0.3)'
+                        ))
+                        fig_mn.add_trace(go.Scatter(
+                            x=df_daily['date'], y=df_daily['cost_basis'],
+                            name='Cost Basis', fill='tozeroy',
+                            line=dict(color='#DD8452', width=1.5),
+                            fillcolor='rgba(221,132,82,0.4)'
+                        ))
+                        fig_mn.update_layout(
+                            title="Portfolio Value vs Cost Basis Over Time",
+                            hovermode='x unified', yaxis_title="Value (€)",
+                            xaxis=dict(showspikes=True, spikemode='across', spikecolor='grey')
                         )
-                        # colors & visual hints
-                        fig_mn.update_traces(selector=dict(name='net_value'), line=dict(color='green'), opacity=0.8)
-                        fig_mn.update_traces(selector=dict(name='market_value'), line=dict(color='blue'), opacity=0.6)
-                        # show vertical spike on hover to compare
-                        fig_mn.update_xaxes(showspikes=True, spikemode='across', spikecolor='grey', spikesnap='cursor')
-                        fig_mn.update_layout(hovermode='x unified', yaxis_title="Value (€)")
                         st.plotly_chart(fig_mn, use_container_width=True)
-                        st.caption("**Interpretation:** Market value is your portfolio's total quoted value at each date. Net value = market value − cost basis (the realized/unrealized profit). The last datapoint for Market Value should match the snapshot Market Value above.")
+                        st.caption("**Market value** (blue) = portfolio worth. **Cost basis** (orange) = invested capital. Gap = unrealised profit/loss.")
 
+                    # ── Chart 2: Net P&L ──────────────────────────────────────────────
                     with col[1]:
-                        # --- Chart: cumulative net (bottom) and cumulative market (top) overlapping ---
-                        fig1 = px.area(
-                            df_daily,
-                            x='date',
-                            y=['cum_net','cum_market'],
-                            labels={'value':'€','variable':'Value Type','date':'Date'},
-                            title="Cumulative Net Value (bottom) and Cumulative Market Value (top)"
+                        fig_pnl = go.Figure()
+                        fig_pnl.add_trace(go.Scatter(
+                            x=df_daily['date'], y=df_daily['net_value'],
+                            name='Net P&L', fill='tozeroy',
+                            line=dict(color='#2ca02c', width=1.5),
+                            fillcolor='rgba(44,160,44,0.25)'
+                        ))
+                        fig_pnl.add_hline(y=0, line_dash="dot", line_color="grey", opacity=0.5)
+                        fig_pnl.update_layout(
+                            title="Net P&L Over Time (Market Value − Cost Basis)",
+                            hovermode='x unified', yaxis_title="Net P&L (€)"
                         )
-                        # Make colors and overlapping appearance clearer by editing traces
-                        fig1.update_traces(selector=dict(name='cum_net'), line=dict(color='green'))
-                        fig1.update_traces(selector=dict(name='cum_market'), line=dict(color='blue'), opacity=0.6)
-                        fig1.update_layout(yaxis_title="Value (€)", xaxis_title="Date", hovermode="x unified")
-                        st.plotly_chart(fig1, use_container_width=True)
-                        st.caption("Market value vs Net profit. Shows how invested capital and gains evolve over time.")
-                    
+                        st.plotly_chart(fig_pnl, use_container_width=True)
+                        st.caption("Unrealised profit/loss at each point. Above zero = in profit.")
+
+                    # ── Chart 3: Relative Performance + trendline ────────────────────
                     col = st.columns(2)
                     with col[0]:
-                        # Chart: Relative Performance over time (instantaneous) — ends at snapshot rel perf
-                        fig_rel = px.line(df_daily, x='date', y='rel_perf_inst', title="Relative Performance Over Time")
-                        fig_rel.update_layout(hovermode='x unified', yaxis_title="Rel Perf (ratio)")
-                        fig_rel.update_xaxes(showspikes=True, spikemode='across', spikecolor='grey', spikesnap='cursor')
+                        fig_rel = go.Figure()
+                        fig_rel.add_trace(go.Scatter(
+                            x=df_daily['date'], y=df_daily['rel_perf'],
+                            name='Rel Performance', mode='lines',
+                            line=dict(color='purple', width=1.5)
+                        ))
+                        try:
+                            from scipy.stats import linregress
+                            x_num = np.arange(len(df_daily))
+                            valid = df_daily['rel_perf'].notna()
+                            slope, intercept, _, _, _ = linregress(x_num[valid], df_daily['rel_perf'][valid])
+                            trend = slope * x_num + intercept
+                            fig_rel.add_trace(go.Scatter(
+                                x=df_daily['date'], y=trend,
+                                name='Trend', mode='lines',
+                                line=dict(color='white', dash='dash', width=1.5)
+                            ))
+                        except Exception:
+                            pass
+                        fig_rel.add_hline(y=0, line_dash="dot", line_color="grey", opacity=0.4)
+                        fig_rel.update_layout(
+                            title="Relative Performance Over Time",
+                            hovermode='x unified', yaxis_title="Return on Cost",
+                            xaxis=dict(showspikes=True, spikemode='across', spikecolor='grey')
+                        )
+                        fig_rel.update_yaxes(tickformat=".1%")
                         st.plotly_chart(fig_rel, use_container_width=True)
-                        st.caption("**Interpretation:** This shows the portfolio performance relative to the invested cost at each date. The final point equals the snapshot relative performance.")
+                        st.caption("**(Market Value − Cost) / Cost**. Dashed = linear trend. Above 0% = in profit.")
 
-
+                    # ── Chart 4: Indexed Portfolio Value ─────────────────────────────
                     with col[1]:
-                        # --- Chart: cumulative relative performance ---
-                        fig2 = px.area(df_daily, x='date', y='cum_rel_perf',
-                                       labels={'cum_rel_perf':'Cumulative Rel Perf (ratio)'},
-                                       title="Cumulative Relative Performance (cum_net / cum_cost)")
-                        fig2.update_xaxes(showspikes=True, spikemode='across', spikecolor='grey', spikesnap='cursor')
-                        st.plotly_chart(fig2, use_container_width=True)
-                        st.caption("Cumulative relative performance. Ratio of profit vs invested cost basis.")
+                        fig_idx = go.Figure()
+                        fig_idx.add_trace(go.Scatter(
+                            x=df_daily['date'], y=df_daily['indexed'],
+                            name='Indexed Value', mode='lines',
+                            line=dict(color='teal', width=1.5)
+                        ))
+                        fig_idx.add_hline(y=100, line_dash="dash", line_color="grey", opacity=0.5)
+                        fig_idx.update_layout(
+                            title="Indexed Portfolio Value (Base = 100)",
+                            hovermode='x unified', yaxis_title="Indexed Value"
+                        )
+                        st.plotly_chart(fig_idx, use_container_width=True)
+                        st.caption("Portfolio value indexed to 100 at start. Shows total growth regardless of invested amount.")
 
-                    # ---------- Risk-Adjusted Performance ----------
+                    # ── Chart 5: Annual Return Bar ────────────────────────────────────
+                    df_annual = df_daily.copy()
+                    df_annual['year'] = pd.to_datetime(df_annual['date']).dt.year
+                    yr = df_annual.groupby('year').last().reset_index()
+                    yr['prev_mv'] = yr['market_value'].shift(1)
+                    yr['annual_return'] = np.where(
+                        yr['prev_mv'] > 0,
+                        (yr['market_value'] - yr['prev_mv']) / yr['prev_mv'],
+                        np.nan
+                    )
+                    yr = yr.dropna(subset=['annual_return'])
+                    if not yr.empty:
+                        yr['color'] = yr['annual_return'].apply(lambda x: '#26a641' if x >= 0 else '#e05252')
+                        fig_ann = go.Figure()
+                        fig_ann.add_trace(go.Bar(
+                            x=yr['year'], y=yr['annual_return'],
+                            marker_color=yr['color'],
+                            text=[f"{v:.1%}" for v in yr['annual_return']],
+                            textposition='outside'
+                        ))
+                        fig_ann.add_hline(y=0, line_dash="dot", line_color="grey", opacity=0.5)
+                        fig_ann.update_layout(
+                            title="Annual Portfolio Return by Year",
+                            yaxis_title="Annual Return", showlegend=False, hovermode="x unified"
+                        )
+                        fig_ann.update_yaxes(tickformat=".1%")
+                        st.plotly_chart(fig_ann, use_container_width=True)
+                        st.caption("Year-on-year return based on market value change.")
 
-                    # cagr_dict = mw.compute_cagr(df_daily)
+                    # ── Chart 6: Rolling 12-Month Return ─────────────────────────────
+                    df_roll = df_daily.copy()
+                    df_roll['date'] = pd.to_datetime(df_roll['date'])
+                    df_roll = df_roll.set_index('date').sort_index()
+                    df_roll['mv_12m_ago'] = df_roll['market_value'].shift(252)
+                    df_roll['rolling_12m'] = np.where(
+                        df_roll['mv_12m_ago'] > 0,
+                        (df_roll['market_value'] - df_roll['mv_12m_ago']) / df_roll['mv_12m_ago'],
+                        np.nan
+                    )
+                    df_roll = df_roll.dropna(subset=['rolling_12m']).reset_index()
+                    if not df_roll.empty:
+                        fig_roll = go.Figure()
+                        fig_roll.add_trace(go.Scatter(
+                            x=df_roll['date'], y=df_roll['rolling_12m'],
+                            mode='lines', line=dict(color='#f0a500', width=1.5)
+                        ))
+                        fig_roll.add_hline(y=0, line_dash="dash", line_color="grey", opacity=0.5)
+                        fig_roll.update_layout(
+                            title="Rolling 12-Month Return",
+                            yaxis_title="12-Month Return", hovermode="x unified"
+                        )
+                        fig_roll.update_yaxes(tickformat=".1%")
+                        st.plotly_chart(fig_roll, use_container_width=True)
+                        st.caption("Return over the trailing 12 months at each date.")
 
-                    # if not cagr_dict:
-                    #     st.info("Not enough data to compute CAGR.")
-                    # else:
-                    #     col1, col2, col3, col4 = st.columns(4)
-                    #     col1.metric("1Y CAGR", f"{cagr_dict['1y']:.2%}" if cagr_dict['1y'] else "N/A")
-                    #     col2.metric("3Y CAGR", f"{cagr_dict['3y']:.2%}" if cagr_dict['3y'] else "N/A")
-                    #     col3.metric("5Y CAGR", f"{cagr_dict['5y']:.2%}" if cagr_dict['5y'] else "N/A")
-                    #     col4.metric("Since Inception", f"{cagr_dict['since_inception']:.2%}" if cagr_dict['since_inception'] else "N/A")
-
-                    # # --- Annual CAGR bar chart ---
-                    # df_cagr = mw.add_annual_performance(df_daily[['date','net_value']])
-                    # if df_cagr.empty:
-                    #     st.info("Not enough data to compute annual CAGR.")
-                    # else:
-                    #     fig_cagr = px.bar(df_cagr, x='year', y='annual_cagr', text='annual_cagr',
-                    #                       title="Annual Compound Growth Rate (CAGR)")
-                    #     fig_cagr.update_traces(texttemplate='%{text:.2%}')
-                    #     st.plotly_chart(fig_cagr, use_container_width=True)
-                    #     st.caption("Annual CAGR shown by calendar year. For short time spans (<3 years), interpret with caution.")
-
-                    # # --- Rolling CAGR / Rolling Returns ---
-                    # cagr_window = st.selectbox("Rolling horizon (years)", [1,3,5], index=1)
-                    # df_rolling = mw.add_rolling_cagr(df_daily, years=cagr_window)
-                    # if df_rolling.empty:
-                    #     st.info("Not enough data to compute rolling CAGR.")
-                    # else:
-                    #     fig_rolling = px.line(df_rolling, x='date', y='cagr', 
-                    #                           title=f"Rolling {cagr_window}Y CAGR")
-                    #     fig_rolling.update_yaxes(tickformat=".2%")
-                    #     st.plotly_chart(fig_rolling, use_container_width=True)
-                    #     st.caption(f"Rolling {cagr_window}-year CAGR: helps identify periods of outperformance/underperformance.")
-
-                    # --- Drawdown chart ---
-                    df_daily['cum_max'] = df_daily['net_value'].cummax()
-                    df_daily['drawdown'] = (df_daily['net_value'] - df_daily['cum_max']) / df_daily['cum_max']
-                    fig_dd = px.area(df_daily, x='date', y='drawdown', title="Portfolio Drawdown Over Time")
-                    fig_dd.update_yaxes(tickformat=".2%")
-                    st.plotly_chart(fig_dd, use_container_width=True)
-                    st.caption("Drawdown = percentage drop from previous peak. Highlights max risk exposure during downturns.")
+                    # ── Chart 7: Drawdown & Drawup ────────────────────────────────────
+                    dd_df = df_daily[df_daily['market_value'] > 0].copy()
+                    if not dd_df.empty:
+                        dd_df['cum_max'] = dd_df['market_value'].cummax()
+                        dd_df['drawdown'] = (dd_df['market_value'] - dd_df['cum_max']) / dd_df['cum_max']
+                        window = min(252, max(1, len(dd_df) // 4))
+                        dd_df['rolling_min'] = dd_df['market_value'].rolling(window=window, min_periods=1).min()
+                        dd_df['drawup'] = np.where(
+                            dd_df['rolling_min'] > 0,
+                            (dd_df['market_value'] - dd_df['rolling_min']) / dd_df['rolling_min'],
+                            np.nan
+                        )
+                        fig_dd = go.Figure()
+                        fig_dd.add_trace(go.Scatter(
+                            x=dd_df['date'], y=dd_df['drawdown'],
+                            name='Drawdown', fill='tozeroy',
+                            line=dict(color='red', width=1),
+                            fillcolor='rgba(255,0,0,0.2)'
+                        ))
+                        fig_dd.add_trace(go.Scatter(
+                            x=dd_df['date'], y=dd_df['drawup'],
+                            name='Drawup', fill='tozeroy',
+                            line=dict(color='green', width=1),
+                            fillcolor='rgba(0,200,0,0.15)'
+                        ))
+                        fig_dd.update_layout(
+                            title="Portfolio Drawdown & Drawup Over Time",
+                            hovermode='x unified', yaxis_title="% from peak/trough",
+                            xaxis=dict(showspikes=True, spikemode='across', spikecolor='grey')
+                        )
+                        fig_dd.update_yaxes(tickformat=".1%")
+                        st.plotly_chart(fig_dd, use_container_width=True)
+                        st.caption("**Red** = % drop from previous peak. **Green** = % gain from recent trough. Shows recovery strength.")
 
                      # --- Scatterplot / cluster-like grouping (performance groups) ---
                     scatter_df = h_filtered.copy()[['security_label','market_value','abs_perf','rel_perf','quantity','security_type']].copy()
@@ -2767,16 +2852,9 @@ with tabs[7]:
         # --- Filter expander ---
         with st.expander("Filters", expanded=False):
             # Security filter — deduplicated
-            unique_syms = sorted(set(
-                format_sec_label(row['symbol'])
-                for _, row in alerts.iterrows()
-                if pd.notna(row.get('symbol'))
-            ))
+            unique_syms = sorted(set(format_sec_label(row['symbol']) for _, row in alerts.iterrows() if pd.notna(row.get('symbol'))))
             sel_secs = st.multiselect("Select securities", options=unique_syms, default=[])
-            sel_sec_ids = (
-                alerts[alerts['symbol'].apply(format_sec_label).isin(sel_secs)]['security_id'].unique().tolist()
-                if sel_secs else None
-            )
+            sel_sec_ids = alerts[alerts['symbol'].apply(format_sec_label).isin(sel_secs)]['security_id'].unique().tolist() if sel_secs else None
 
             # Alert type filter
             alert_types = sorted(alerts['alert_type'].dropna().unique().tolist())
@@ -2810,13 +2888,11 @@ with tabs[7]:
             """)
 
 
-        # Pagination
         ALERT_PAGE_SIZE = 15
         al_total = len(df_filtered)
         al_pages = max(1, (al_total + ALERT_PAGE_SIZE - 1) // ALERT_PAGE_SIZE)
-        al_page = st.number_input("Alerts page", min_value=1, max_value=al_pages, value=1, step=1,
-                                   key="al_page", label_visibility="collapsed") if al_pages > 1 else 1
-        st.subheader(f"Showing {min(ALERT_PAGE_SIZE, al_total)} of {al_total} Alerts — page {al_page}/{al_pages}")
+        al_page = st.number_input(f"Alerts page (1-{al_pages})", min_value=1, max_value=al_pages, value=1, step=1, key="al_page") if al_pages > 1 else 1
+        st.subheader(f"Showing {min(ALERT_PAGE_SIZE*(al_page), al_total) - ALERT_PAGE_SIZE*(al_page-1)} of {al_total} Alerts")
         df_filtered = df_filtered.iloc[(al_page-1)*ALERT_PAGE_SIZE : al_page*ALERT_PAGE_SIZE].copy()
 
         # --- Alerts List in expander ---
