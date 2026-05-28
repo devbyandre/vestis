@@ -2382,6 +2382,12 @@ with tabs[5]:
 
             display_cols = ['tx_date', 'security_label', 'portfolio', 'tx_type', 'quantity', 'price', 'tx_cost', 'total_cost']
             df_display = df_tx[display_cols + ['id']].sort_values('tx_date', ascending=False).reset_index(drop=True)
+            TX_PAGE_SIZE = 20
+            tx_total = len(df_display)
+            tx_pages = max(1, (tx_total + TX_PAGE_SIZE - 1) // TX_PAGE_SIZE)
+            tx_page = st.number_input(f"Page (1-{tx_pages})", min_value=1, max_value=tx_pages, value=1, step=1, key="tx_page") if tx_pages > 1 else 1
+            st.caption(f"Showing page {tx_page}/{tx_pages} — {tx_total} transactions total")
+            df_display = df_display.iloc[(tx_page-1)*TX_PAGE_SIZE : tx_page*TX_PAGE_SIZE]
 
             # Column headers
             h1, h2, h3, h4, h5, h6, h7, h8, h9, h10 = st.columns([1.2, 2.5, 2, 1.2, 1.2, 1.5, 1.5, 1.5, 1, 1])
@@ -2408,10 +2414,11 @@ with tabs[5]:
 
                 # Use markdown to render colored arrows
                 c4.markdown(display_type, unsafe_allow_html=True)
-                c5.write(f"{row['quantity']:.2f}")
-                c6.write(f"€{row['price']:.2f}")
-                c7.write(f"€{row['tx_cost']:.2f}")
-                c8.write(f"€{row['total_cost']:.2f}")
+                is_split = str(row['tx_type']).lower() == 'split'
+                c5.write(f"×{row['quantity']:.4f}" if is_split else f"{row['quantity']:.4f}")
+                c6.write("—" if is_split or float(row['price'] or 0) == 0 else f"€{row['price']:.2f}")
+                c7.write("—" if is_split or float(row['tx_cost'] or 0) == 0 else f"€{row['tx_cost']:.2f}")
+                c8.write("—" if is_split or float(row['total_cost'] or 0) == 0 else f"€{row['total_cost']:.2f}")
 
                 tx_id = row.get('id')
                 edit_btn = c9.button("✏️", key=f"edit_{tx_id}") if tx_id is not None else None
