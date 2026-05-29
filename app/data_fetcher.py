@@ -16,47 +16,43 @@ import sys
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
-# ── Fetch run failure tracking ──────────────────────────────────────────────
-_fetch_errors: list = []    # full failures (both prices and fundamentals)
-_fetch_warnings: list = []  # partial failures (one of the two succeeded)
+# Fetch run failure tracking
+_fetch_errors: list = []
+_fetch_warnings: list = []
 
 
 def _notify_fetch_summary() -> None:
-    """Send a Telegram summary if any fetch failures occurred during this run."""
+    """Send Telegram summary if any fetch failures occurred."""
     global _fetch_errors, _fetch_warnings
     if not _fetch_errors and not _fetch_warnings:
         _fetch_errors = []
         _fetch_warnings = []
         return
-
     try:
         from config_utils import get_config
         import requests as _req
         token = get_config("telegram_bot_token")
-        chat  = get_config("telegram_chat_id")
+        chat = get_config("telegram_chat_id")
         if not token or not chat:
             _fetch_errors = []
             _fetch_warnings = []
             return
-
         lines = ["🔴 *Data Fetcher — Issues Detected*", ""]
         if _fetch_errors:
-            lines.append(f"*{len(_fetch_errors)} failures:*")
-            lines.extend(_fetch_errors[:10])  # cap at 10 to avoid huge messages
+            lines.append("*%d failures:*" % len(_fetch_errors))
+            lines.extend(_fetch_errors[:10])
             if len(_fetch_errors) > 10:
-                lines.append(f"_...and {len(_fetch_errors) - 10} more_")
+                lines.append("_...and %d more_" % (len(_fetch_errors) - 10))
             lines.append("")
         if _fetch_warnings:
-            lines.append(f"*{len(_fetch_warnings)} partial:*")
+            lines.append("*%d partial:*" % len(_fetch_warnings))
             lines.extend(_fetch_warnings[:5])
             if len(_fetch_warnings) > 5:
-                lines.append(f"_...and {len(_fetch_warnings) - 5} more_")
-
+                lines.append("_...and %d more_" % (len(_fetch_warnings) - 5))
         lines.append("\n_Check logs for details_")
         msg = "\n".join(lines)
-
         _req.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
+            "https://api.telegram.org/bot%s/sendMessage" % token,
             json={"chat_id": chat, "text": msg, "parse_mode": "Markdown"},
             timeout=10
         )
@@ -253,17 +249,15 @@ def fetch_fundamentals_and_dividends(
     symbol: str,
     throttler: Throttler,
     max_retries: int = 3,
-    fundamentals_update_hours: int = 24 * 7,  # weekly
-    force: bool = False
+    fundamentals_update_hours: int = 24 * 7  # weekly
 ) -> bool:
     """
     Fetch info, financials, and dividends for a single ticker.
-    Only updates if last fundamentals update is older than fundamentals_update_hours,
-    unless force=True in which case the staleness check is skipped.
+    Only updates if last fundamentals update is older than fundamentals_update_hours.
     """
     security_id = db.get_security_id(symbol)
     last_update = db.get_last_info_update(security_id)
-    if not force and not should_update(last_update, fundamentals_update_hours):
+    if not should_update(last_update, fundamentals_update_hours):
         logging.info("Skipping %s, fundamentals updated recently.", symbol)
         return False
 
@@ -289,53 +283,30 @@ def fetch_fundamentals_and_dividends(
             if not t.dividends.empty:
                 db.store_dividends(security_id, t.dividends)
 
-            # Split detection — only for securities we have actually BOUGHT,
-            # and only for splits that occurred after our first purchase date.
-            # Watchlist-only securities (no buy transactions) are ignored.
+            # Split detection — only for securities we actually hold,
+            # and only for splits after our first purchase date
             try:
                 yf_splits = t.splits
                 if yf_splits is not None and not yf_splits.empty:
+                    # Check if we have any transactions for this security
                     tx = db.list_transactions_for_security_any_portfolio(security_id)
-                    # Filter to buy transactions only — watchlist entries have no buys
-                    buys = tx[tx['type'].str.lower() == 'buy'] if (tx is not None and not tx.empty) else None
-                    if buys is None or buys.empty:
-                        logging.debug("Split check: %s has no buy transactions — skipping", symbol)
+                    if tx is None or tx.empty:
+                        pass  # not held — skip split detection
                     else:
-                        first_buy = pd.to_datetime(buys['date']).min().replace(tzinfo=None)
+                        # Only care about splits after our first buy
+                        first_buy = pd.to_datetime(tx['date']).min().replace(tzinfo=None)
                         recorded = db.get_recorded_splits(security_id)
-                        recorded_dates = set(str(d)[:10] for d in recorded) if recorded else set()
-                        # Pre-compute cumulative net quantity by date for position check
-                        tx_sorted = tx.copy()
-                        tx_sorted['date_dt'] = pd.to_datetime(tx_sorted['date']).dt.tz_localize(None)
-                        tx_sorted = tx_sorted.sort_values('date_dt')
-                        tx_sorted['signed_qty'] = tx_sorted.apply(
-                            lambda r: float(r['quantity']) if r['type'].lower() == 'buy'
-                                      else -float(r['quantity']) if r['type'].lower() == 'sell'
-                                      else 0, axis=1
-                        )
-                        tx_sorted['cum_qty'] = tx_sorted['signed_qty'].cumsum()
-
+                        recorded_dates = set(recorded) if recorded else set()
                         for split_date, ratio in yf_splits.items():
                             split_dt = pd.Timestamp(split_date).replace(tzinfo=None)
                             if split_dt < first_buy:
-                                continue  # split before we ever owned it — skip
-
-                            # Check net quantity held on the split date
-                            prior = tx_sorted[tx_sorted['date_dt'] <= split_dt]
-                            net_qty_on_split = float(prior['cum_qty'].iloc[-1]) if not prior.empty else 0.0
-                            if net_qty_on_split <= 0:
-                                logging.debug(
-                                    "Split check: %s had net qty %.4f on %s — not held, skipping",
-                                    symbol, net_qty_on_split, split_dt.date()
-                                )
-                                continue  # not holding on split date — irrelevant
-
+                                continue  # happened before we owned it — skip
                             split_date_str = split_dt.strftime("%Y-%m-%d")
                             if split_date_str not in recorded_dates:
                                 logging.warning(
-                                    "⚠️ UNRECORDED SPLIT detected for %s: ratio=%.4f on %s "
-                                    "(held %.4f shares on that date)",
-                                    symbol, float(ratio), split_date_str, net_qty_on_split
+                                    "⚠️ UNRECORDED SPLIT detected for %s: ratio=%.4f on %s — "
+                                    "please add a split transaction in Vestis to adjust your holdings.",
+                                    symbol, float(ratio), split_date_str
                                 )
                                 db.store_split_alert(security_id, split_date_str, float(ratio))
             except Exception:
@@ -367,25 +338,21 @@ def update_symbols(symbols: List[str], throttler: Throttler, force: bool = False
     if not symbols:
         return
 
-    # Compute start date for batch fetch:
-    # If force=True OR no price history exists, go back to the earliest transaction date
-    # so we get full historical data. Otherwise start from last stored price date.
+    # Compute start date — normalise all to ISO string to avoid str vs Timestamp errors.
+    # force=True or no history: go back to first buy date for full backfill.
     start_dates = {}
     for sym in symbols:
         latest_df = db.get_price_series(sym, None, "2100-01-01")
         if not latest_df.empty and not force:
-            start_dates[sym] = latest_df["date"].max()
+            start_dates[sym] = str(latest_df["date"].max())[:10]
         else:
-            # No prices or forced — fetch from first transaction date (or 5 years back)
             sec_id = db.get_security_id(sym)
             first_buy = db.get_first_buy_date(sec_id) if sec_id else None
-            if first_buy:
-                start_dates[sym] = first_buy
-            else:
-                start_dates[sym] = (pd.Timestamp.now() - pd.Timedelta(days=365*5)).strftime("%Y-%m-%d")
+            start_dates[sym] = str(first_buy)[:10] if first_buy else (
+                pd.Timestamp.now() - pd.Timedelta(days=365 * 5)).strftime("%Y-%m-%d")
 
     start_date = min([d for d in start_dates.values() if d is not None], default=None)
-    logging.info("Starting batch price fetch for %d symbols", len(symbols))
+    logging.info("Starting batch price fetch for %d symbols from %s", len(symbols), start_date)
     prices_result = fetch_prices_batch(symbols, throttler, start_date=start_date)
 
     for sym in symbols:
@@ -396,21 +363,16 @@ def update_symbols(symbols: List[str], throttler: Throttler, force: bool = False
             logging.info("✅ Fully updated %s", sym)
         elif price_success:
             logging.warning("⚠️ Only prices updated for %s", sym)
-            _fetch_warnings.append(f"⚠️ {sym}: prices only (fundamentals skipped/failed)")
         elif fundamentals_success:
             logging.warning("⚠️ Only fundamentals updated for %s", sym)
-            _fetch_warnings.append(f"⚠️ {sym}: fundamentals only (prices failed)")
         else:
             logging.error("❌ Failed to update %s", sym)
-            _fetch_errors.append(f"❌ {sym}: both prices and fundamentals failed")
 
 
 
 def run_fetch(tickers: List[str], batch_size: int = 20, force: bool = False):
     """Fetch and store data for a list of tickers in batches.
-    
-    force=True bypasses the fundamentals staleness check and re-fetches
-    fundamentals + split detection even if recently updated.
+    force=True bypasses fundamentals staleness check and backfills full price history.
     """
     if not tickers:
         logging.info("No tickers provided, updating all securities in DB")
@@ -433,7 +395,6 @@ def run_fetch(tickers: List[str], batch_size: int = 20, force: bool = False):
     else:
         logging.warning("⚠️ FX rate update incomplete or failed.")
 
-    # ── Send Telegram summary if any failures occurred ─────────────────────
     _notify_fetch_summary()
 
 
@@ -628,7 +589,7 @@ if __name__ == "__main__":
         "--force",
         action="store_true",
         default=False,
-        help="Force re-fetch fundamentals even if recently updated (bypasses staleness check)"
+        help="Force re-fetch fundamentals and full price history (bypasses staleness check)"
     )
     args = ap.parse_args()
 
