@@ -11,35 +11,19 @@ import pandas as pd
 import requests
 import middleware as mw
 from config_utils import get_config
+import telegram_client as tg
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
+# Delegate pure Telegram primitives to shared client module
 def _md(text: str) -> str:
-    if not isinstance(text, str):
-        text = str(text)
-    return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', text)
+    return tg.md_escape(text)
 
 def _get_creds(cli_token=None, cli_chat=None):
-    token = cli_token or get_config("telegram_bot_token")
-    chat  = cli_chat  or get_config("telegram_chat_id")
-    return token, chat
+    return tg.get_creds(cli_token, cli_chat)
 
 def send_telegram(token: str, chat_id: str, text: str, max_retries: int = 3) -> bool:
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-    backoff = 1.0
-    for attempt in range(1, max_retries + 1):
-        try:
-            r = requests.post(url, json=payload, timeout=10)
-            if r.status_code == 200:
-                logging.info("Telegram message sent")
-                return True
-            logging.warning("Telegram send failed %s: %s", r.status_code, r.text[:200])
-        except Exception:
-            logging.exception("Telegram send exception")
-        time.sleep(backoff)
-        backoff *= 2
-    return False
+    return tg.send_message(token, chat_id, text, max_retries=max_retries)
 
 """ def _describe_alert(alert_type: str, params) -> str:
     try:
@@ -529,10 +513,19 @@ def main():
     if args.test:
         test_telegram(args.token, args.chat)
         return
-    maintain_alerts()
-    run_immediate(args.token, args.chat)
-    if args.digest:
-        send_digest(args.token, args.chat, args.digest)
+    try:
+        maintain_alerts()
+        run_immediate(args.token, args.chat)
+        if args.digest:
+            send_digest(args.token, args.chat, args.digest)
+    except Exception as e:
+        logging.exception("Telegram worker crashed")
+        try:
+            tg.notify_error("telegram_worker", error=e,
+                            message="The Telegram alert worker crashed.")
+        except Exception:
+            logging.exception("Failed to send crash notification")
+        raise
 
 if __name__ == "__main__":
     main()

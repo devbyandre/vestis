@@ -12,6 +12,17 @@ import db_utils as db
 import middleware as mw
 
 import sys
+import os
+import telegram_client as tg
+
+# Direct yfinance cache to a writable, unique location to avoid TzCache folder
+# race conditions when multiple threads init simultaneously.
+try:
+    _cache_dir = os.environ.get("YF_CACHE_DIR", "/tmp/py-yfinance")
+    os.makedirs(_cache_dir, exist_ok=True)
+    yf.set_tz_cache_location(_cache_dir)
+except Exception:
+    pass
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -29,13 +40,8 @@ def _notify_fetch_summary() -> None:
         _fetch_warnings = []
         return
     try:
-        from config_utils import get_config
-        import requests as _req
-        token = get_config("telegram_bot_token")
-        chat = get_config("telegram_chat_id")
+        token, chat = tg.get_creds()
         if not token or not chat:
-            _fetch_errors = []
-            _fetch_warnings = []
             return
         lines = ["🔴 *Data Fetcher — Issues Detected*", ""]
         if _fetch_errors:
@@ -50,12 +56,7 @@ def _notify_fetch_summary() -> None:
             if len(_fetch_warnings) > 5:
                 lines.append("_...and %d more_" % (len(_fetch_warnings) - 5))
         lines.append("\n_Check logs for details_")
-        msg = "\n".join(lines)
-        _req.post(
-            "https://api.telegram.org/bot%s/sendMessage" % token,
-            json={"chat_id": chat, "text": msg, "parse_mode": "Markdown"},
-            timeout=10
-        )
+        tg.send_message(token, chat, "\n".join(lines))
         logging.info("Fetch failure summary sent to Telegram")
     except Exception:
         logging.exception("Failed to send fetch summary to Telegram")
@@ -216,7 +217,10 @@ def fetch_prices_batch(
                 # Convert date to ISO string (YYYY-MM-DD)
                 hist['date'] = pd.to_datetime(hist['date']).dt.strftime('%Y-%m-%d')
 
-                # Fill missing adj_close with close
+                # Fill missing adj_close with close.
+                # Cast to numeric first to avoid pandas object-downcast FutureWarning.
+                hist['adj_close'] = pd.to_numeric(hist['adj_close'], errors='coerce')
+                hist['close'] = pd.to_numeric(hist['close'], errors='coerce')
                 hist['adj_close'] = hist['adj_close'].fillna(hist['close'])
 
                 # Keep only rows with valid date and at least one price
@@ -596,4 +600,13 @@ if __name__ == "__main__":
     args = ap.parse_args()
 
     tickers = [t.strip() for t in args.tickers.split(",") if t.strip()] if args.tickers else []
-    run_fetch(tickers, force=args.force)
+    try:
+        run_fetch(tickers, force=args.force)
+    except Exception as e:
+        logging.exception("Data fetcher crashed")
+        try:
+            tg.notify_error("data_fetcher", error=e,
+                            message="The data fetcher crashed during run_fetch.")
+        except Exception:
+            logging.exception("Failed to notify fetcher crash")
+        raise
