@@ -924,20 +924,8 @@ def get_portfolio_symbols(portfolio_name: str) -> list:
 
 
 def get_alerts() -> pd.DataFrame:
-    """Return ACTIVE alerts only — used by telegram worker for evaluation."""
-    df = db.get_all_alerts(active_only=True)
-    if df.empty:
-        return pd.DataFrame(columns=[
-            "id", "security_id", "alert_type", "params",
-            "active", "notify_mode", "cooldown_seconds",
-            "last_evaluated", "last_triggered", "note", "auto_managed"
-        ])
-    return df
-
-
-def get_all_alerts_for_ui() -> pd.DataFrame:
-    """Return ALL alerts including inactive — used by the UI management page."""
-    df = db.get_all_alerts(active_only=False)
+    """Return all alerts with security name for UI."""
+    df = db.get_all_alerts()
     if df.empty:
         return pd.DataFrame(columns=[
             "id", "security_id", "alert_type", "params",
@@ -1366,9 +1354,14 @@ def get_latest_holdings_snapshot(
 
     df['date'] = pd.to_datetime(df['date'])
 
-    # restrict to the global latest date
-    latest_date = df['date'].max()
-    latest = df[df['date'] == latest_date].copy()
+    # For each security+portfolio, take only its own most recent row.
+    # Using global MAX would drop securities whose prices haven't been
+    # fetched today yet — they'd fall off when any other security updates.
+    latest = (
+        df.sort_values('date')
+          .groupby(['security_id', 'portfolio_id'], as_index=False)
+          .last()
+    ).copy()
 
     # compute performance columns
     latest['cost_basis'] = latest.get('cost_basis', 0.0)
