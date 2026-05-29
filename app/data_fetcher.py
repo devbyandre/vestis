@@ -249,15 +249,17 @@ def fetch_fundamentals_and_dividends(
     symbol: str,
     throttler: Throttler,
     max_retries: int = 3,
-    fundamentals_update_hours: int = 24 * 7  # weekly
+    fundamentals_update_hours: int = 24 * 7,  # weekly
+    force: bool = False
 ) -> bool:
     """
     Fetch info, financials, and dividends for a single ticker.
-    Only updates if last fundamentals update is older than fundamentals_update_hours.
+    Only updates if last fundamentals update is older than fundamentals_update_hours,
+    unless force=True in which case the staleness check is skipped.
     """
     security_id = db.get_security_id(symbol)
     last_update = db.get_last_info_update(security_id)
-    if not should_update(last_update, fundamentals_update_hours):
+    if not force and not should_update(last_update, fundamentals_update_hours):
         logging.info("Skipping %s, fundamentals updated recently.", symbol)
         return False
 

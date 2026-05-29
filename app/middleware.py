@@ -924,8 +924,20 @@ def get_portfolio_symbols(portfolio_name: str) -> list:
 
 
 def get_alerts() -> pd.DataFrame:
-    """Return all alerts with security name for UI."""
-    df = db.get_all_alerts()
+    """Return ACTIVE alerts only — used by telegram worker for evaluation."""
+    df = db.get_all_alerts(active_only=True)
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "id", "security_id", "alert_type", "params",
+            "active", "notify_mode", "cooldown_seconds",
+            "last_evaluated", "last_triggered", "note", "auto_managed"
+        ])
+    return df
+
+
+def get_all_alerts_for_ui() -> pd.DataFrame:
+    """Return ALL alerts including inactive — used by the UI management page."""
+    df = db.get_all_alerts(active_only=False)
     if df.empty:
         return pd.DataFrame(columns=[
             "id", "security_id", "alert_type", "params",
