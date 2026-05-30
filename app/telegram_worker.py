@@ -10,7 +10,7 @@ import json
 import pandas as pd
 import requests
 import middleware as mw
-from config_utils import get_config
+from config_utils import get_config, set_config
 import telegram_client as tg
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -395,7 +395,7 @@ def send_digest(cli_token=None, cli_chat=None, freq="daily"):
     parts.append(f"_Generated {now.strftime('%Y-%m-%d %H:%M UTC')}_")
     body = "\n".join(parts)
     if send_telegram(token, chat, body):
-        mw.set_config(key, now.isoformat())
+        set_config(key, now.isoformat())
         logging.info("Digest (%s) sent", freq)
 
 def test_telegram(cli_token=None, cli_chat=None):
