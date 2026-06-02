@@ -951,7 +951,7 @@ def get_automatic_alerts() -> pd.DataFrame:
     df = get_alerts()
     if 'auto_managed' not in df.columns:
         return pd.DataFrame(columns=df.columns)  # no automatic alerts if column missing
-    return df[df['auto_managed'] == True]
+    return df[df['auto_managed'].isin([1, True])]
 
 def create_alert(security_id: int, alert_type: str, params: dict,
                  notify_mode: str = "immediate", cooldown_seconds: int = 3600,
