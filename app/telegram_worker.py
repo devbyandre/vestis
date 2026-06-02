@@ -164,7 +164,7 @@ def _describe_alert(alert_type: str, params) -> str:
                 continue
             cooldown = int(alert.get('cooldown_seconds') or 14400)
             last_trigger = mw.last_trigger(alert_id)
-            if last_trigger and (now - last_trigger).total_seconds() < cooldown:
+            if last_trigger and (now - last_trigger.replace(tzinfo=None)).total_seconds() < cooldown:
                 logging.debug("Alert %s on cooldown", alert_id)
                 continue
             try:
@@ -230,7 +230,7 @@ def run_immediate(cli_token=None, cli_chat=None):
             else:
                 cooldown = int(alert.get('cooldown_seconds') or 14400)
             last_trigger = mw.last_trigger(alert_id)
-            if last_trigger and (now - last_trigger).total_seconds() < cooldown:
+            if last_trigger and (now - last_trigger.replace(tzinfo=None)).total_seconds() < cooldown:
                 logging.debug("Alert %s on cooldown", alert_id)
                 continue
             # split_pending alerts are always triggered (fire until split is recorded)
