@@ -2683,25 +2683,16 @@ with tabs[5]:
                         st.stop()
 
                 # Add transaction
-                if tx_type == "split":
-                    mw.add_split_transaction(
-                        portfolio_id=portfolio_id,
-                        symbol=tx_symbol,
-                        split_date=tx_date.isoformat(),
-                        ratio=tx_split_ratio
-                    )
-                    st.success(f"Split recorded for {tx_symbol} (ratio {tx_split_ratio:.4f}). Holdings have been recomputed.")
-                else:
-                    mw.add_transaction(
-                        portfolio_id=portfolio_id,
-                        symbol=tx_symbol,
-                        tx_date=tx_date.isoformat(),
-                        tx_type=tx_type,
-                        quantity=tx_qty,
-                        price=price_to_use,
-                        fees=tx_fees
-                    )
-                    st.success("Transaction added")
+                mw.add_transaction(
+                    portfolio_id=portfolio_id,
+                    symbol=tx_symbol,
+                    tx_date=tx_date.isoformat(),
+                    tx_type=tx_type,
+                    quantity=tx_qty,
+                    price=price_to_use,
+                    fees=tx_fees
+                )
+                st.success("Transaction added")
                 st.rerun()
 
     st.divider()

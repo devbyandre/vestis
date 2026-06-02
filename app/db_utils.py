@@ -1159,7 +1159,13 @@ def last_trigger_time(alert_id: int) -> Optional[pd.Timestamp]:
         "SELECT triggered_at FROM alerts_log WHERE alert_id=? ORDER BY triggered_at DESC LIMIT 1",
         (alert_id,),
     )
-    return pd.to_datetime(df.iloc[0]["triggered_at"]) if not df.empty else None
+    if df.empty:
+        return None
+    ts = pd.to_datetime(df.iloc[0]["triggered_at"])
+    # Normalise to tz-naive UTC so callers can compare with pd.Timestamp.utcnow()
+    if ts.tzinfo is not None:
+        ts = ts.tz_convert("UTC").tz_localize(None)
+    return ts
 
 
 def get_active_alerts() -> List[Dict]:

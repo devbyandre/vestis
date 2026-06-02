@@ -4,7 +4,26 @@ import json
 import os
 from typing import Dict, Any
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+# Resolve a writable config path:
+# 1. Explicit env var CONFIG_PATH_OVERRIDE
+# 2. /data/config.json (writable Docker volume)
+# 3. Fall back to /app/config.json (may be read-only in production)
+def _resolve_config_path() -> str:
+    override = os.environ.get("CONFIG_PATH_OVERRIDE", "")
+    if override:
+        return override
+    data_path = "/data/config.json"
+    if os.path.exists(data_path):
+        return data_path
+    # /data may not exist yet — try to create it
+    try:
+        os.makedirs("/data", exist_ok=True)
+        return data_path
+    except OSError:
+        pass
+    return os.path.join(os.path.dirname(__file__), "config.json")
+
+CONFIG_PATH = _resolve_config_path()
 
 DEFAULT = {
     "db_path": os.path.expanduser("portfolio.db"),

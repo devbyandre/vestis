@@ -53,9 +53,18 @@ def send_telegram(token: str, chat_id: str, text: str, max_retries: int = 3) -> 
         days = p.get("days", 3)
         return f"📅 Earnings in ≤{days} days"
     if alert_type == "rsi":
+        # New format: single direction
+        if "direction" in p:
+            direction = p.get("direction", "above")
+            thr = p.get("threshold", 70)
+            if direction == "above":
+                return f"📈 RSI overbought — crossed above {thr}"
+            else:
+                return f"📉 RSI oversold — crossed below {thr}"
+        # Legacy combined format
         ob = p.get("overbought", 70)
         os_ = p.get("underbought", 30)
-        return f"RSI overbought >{ob} or oversold <{os_}"
+        return f"RSI zone crossed (overbought >{ob} / oversold <{os_})"
     if alert_type in ("ma_crossover", "golden_cross", "death_cross"):
         short = p.get("short", 20)
         long_ = p.get("long", 50)
@@ -98,9 +107,18 @@ def _describe_alert(alert_type: str, params) -> str:
         days = p.get("days", 3)
         return f"📅 Earnings in ≤{days} days"
     if alert_type == "rsi":
+        # New format: single direction
+        if "direction" in p:
+            direction = p.get("direction", "above")
+            thr = p.get("threshold", 70)
+            if direction == "above":
+                return f"📈 RSI overbought — crossed above {thr}"
+            else:
+                return f"📉 RSI oversold — crossed below {thr}"
+        # Legacy combined format
         ob = p.get("overbought", 70)
         os_ = p.get("underbought", 30)
-        return f"RSI overbought >{ob} or oversold <{os_}"
+        return f"RSI zone crossed (overbought >{ob} / oversold <{os_})"
     if alert_type in ("ma_crossover", "golden_cross", "death_cross"):
         short = p.get("short", 20)
         long_ = p.get("long", 50)
@@ -173,9 +191,11 @@ def _describe_alert(alert_type: str, params) -> str:
         body += f"\n\n_{now.strftime('%Y-%m-%d %H:%M UTC')}_"
         if send_telegram(token, chat, body):
             for alert_id, _, al in fired_lines:
-                payload = {"note": "immediate"}
-                if al.get("_curr_side"):
-                    payload["side"] = al["_curr_side"]
+                # Store _curr_side so RSI crossing detection works on next run
+                payload = {
+                    "note": al.get("_curr_side") or "immediate",
+                    "side": al.get("_curr_side") or "",
+                }
                 mw.log_trigger(alert_id, payload)
             fired_count += len(fired_lines)
     logging.info("Immediate run complete — %d alerts fired", fired_count) """
@@ -243,9 +263,11 @@ def run_immediate(cli_token=None, cli_chat=None):
         body += f"\n\n_{now.strftime('%Y-%m-%d %H:%M UTC')}_"
         if send_telegram(token, chat, body):
             for alert_id, _, al in fired_lines:
-                payload = {"note": "immediate"}
-                if al.get("_curr_side"):
-                    payload["side"] = al["_curr_side"]
+                # Store _curr_side so RSI crossing detection works on next run
+                payload = {
+                    "note": al.get("_curr_side") or "immediate",
+                    "side": al.get("_curr_side") or "",
+                }
                 mw.log_trigger(alert_id, payload)
             fired_count += len(fired_lines)
     logging.info("Immediate run complete — %d alerts fired", fired_count)

@@ -1191,10 +1191,38 @@ def evaluate_alert(alert: dict) -> bool:
         elif a_type == "rsi":
             rsi_val = data.get("rsi")
             if rsi_val is not None:
-                thr = float(params.get("threshold", 70))
-                direction = params.get("direction", "above")
-                result = (direction == "above" and rsi_val > thr) or \
-                         (direction == "below" and rsi_val < thr)
+                # Support two alert formats:
+                # New: {"threshold": 70, "direction": "above"}  (overbought)
+                # New: {"threshold": 30, "direction": "below"}  (oversold)
+                # Legacy combined: {"overbought": 70, "underbought": 30}
+                #   → treat as overbought check (direction="above", thr=overbought)
+                if "overbought" in params or "underbought" in params:
+                    # Legacy: check both, fire on either zone entry
+                    ob = float(params.get("overbought", 70))
+                    os_ = float(params.get("underbought", 30))
+                    curr_side = "above" if rsi_val > ob else ("below" if rsi_val < os_ else "neutral")
+                    try:
+                        last_log = db.get_last_alert_log(alert.get("id"))
+                        last_side = (last_log or {}).get("side", "neutral")
+                    except Exception:
+                        last_side = "neutral"
+                    # Fire if entering overbought or oversold zone (crossing detection)
+                    result = (curr_side in ("above", "below")) and curr_side != last_side
+                    alert["_curr_side"] = curr_side
+                else:
+                    # New format: single direction/threshold with crossing detection
+                    thr = float(params.get("threshold", 70))
+                    direction = params.get("direction", "above")
+                    curr_side = "above" if rsi_val > thr else "below"
+                    try:
+                        last_log = db.get_last_alert_log(alert.get("id"))
+                        last_side = (last_log or {}).get("side", "")
+                    except Exception:
+                        last_side = ""
+                    # Fire only when crossing INTO the trigger zone
+                    crossed = (curr_side == direction) and (last_side != direction)
+                    result = crossed or (not last_side and curr_side == direction)
+                    alert["_curr_side"] = curr_side
 
         elif a_type == "ma_crossover":
             # Only fire if the cross happened within the last `lookback` bars
