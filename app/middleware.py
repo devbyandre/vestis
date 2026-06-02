@@ -1191,38 +1191,10 @@ def evaluate_alert(alert: dict) -> bool:
         elif a_type == "rsi":
             rsi_val = data.get("rsi")
             if rsi_val is not None:
-                # Support two alert formats:
-                # New: {"threshold": 70, "direction": "above"}  (overbought)
-                # New: {"threshold": 30, "direction": "below"}  (oversold)
-                # Legacy combined: {"overbought": 70, "underbought": 30}
-                #   → treat as overbought check (direction="above", thr=overbought)
-                if "overbought" in params or "underbought" in params:
-                    # Legacy: check both, fire on either zone entry
-                    ob = float(params.get("overbought", 70))
-                    os_ = float(params.get("underbought", 30))
-                    curr_side = "above" if rsi_val > ob else ("below" if rsi_val < os_ else "neutral")
-                    try:
-                        last_log = db.get_last_alert_log(alert.get("id"))
-                        last_side = (last_log or {}).get("side", "neutral")
-                    except Exception:
-                        last_side = "neutral"
-                    # Fire if entering overbought or oversold zone (crossing detection)
-                    result = (curr_side in ("above", "below")) and curr_side != last_side
-                    alert["_curr_side"] = curr_side
-                else:
-                    # New format: single direction/threshold with crossing detection
-                    thr = float(params.get("threshold", 70))
-                    direction = params.get("direction", "above")
-                    curr_side = "above" if rsi_val > thr else "below"
-                    try:
-                        last_log = db.get_last_alert_log(alert.get("id"))
-                        last_side = (last_log or {}).get("side", "")
-                    except Exception:
-                        last_side = ""
-                    # Fire only when crossing INTO the trigger zone
-                    crossed = (curr_side == direction) and (last_side != direction)
-                    result = crossed or (not last_side and curr_side == direction)
-                    alert["_curr_side"] = curr_side
+                thr = float(params.get("threshold", 70))
+                direction = params.get("direction", "above")
+                result = (direction == "above" and rsi_val > thr) or \
+                         (direction == "below" and rsi_val < thr)
 
         elif a_type == "ma_crossover":
             # Only fire if the cross happened within the last `lookback` bars
@@ -1403,36 +1375,31 @@ def get_latest_holdings_snapshot(
           .last()
     ).copy()
 
-    # Filter out fully sold positions — after a sell the recompute produces
-    # no rows (qty<=0 rows are skipped), so the last row is pre-sell.
-    # We check the actual net quantity from transactions to catch this.
-    if not latest.empty and 'security_id' in latest.columns:
-        sec_ids = latest['security_id'].unique().tolist()
-        port_ids = latest['portfolio_id'].unique().tolist() if 'portfolio_id' in latest.columns else []
-        # For each security+portfolio pair, check net qty from transactions
-        # Only exclude if net qty is truly 0 or negative
-        if sec_ids and port_ids:
+    # Filter out fully sold positions: recompute skips qty<=0 rows, so the
+    # last row in holdings_timeseries is pre-sell. Check actual net quantity
+    # from transactions directly.
+    if not latest.empty and 'security_id' in latest.columns and 'portfolio_id' in latest.columns:
+        keep = []
+        for _, row in latest.iterrows():
             try:
-                net_qty_rows = []
-                for _, row in latest.iterrows():
-                    sid = int(row['security_id'])
-                    pid = int(row['portfolio_id'])
-                    tx_df = list_transactions_for_security(pid, sid)
-                    if tx_df is not None and not tx_df.empty:
-                        net = 0.0
-                        for _, tx in tx_df.iterrows():
-                            t = str(tx.get('type', '')).lower()
-                            q = float(tx.get('quantity') or 0)
-                            if t == 'buy':
-                                net += q
-                            elif t == 'sell':
-                                net -= q
-                        net_qty_rows.append(net > 1e-8)
-                    else:
-                        net_qty_rows.append(False)
-                latest = latest[net_qty_rows].copy()
+                sid = int(row['security_id'])
+                pid = int(row['portfolio_id'])
+                tx_df = db.list_transactions_for_security(pid, sid)
+                if tx_df is None or tx_df.empty:
+                    keep.append(False)
+                    continue
+                net = 0.0
+                for _, tx in tx_df.iterrows():
+                    t = str(tx.get('type', '')).lower()
+                    q = float(tx.get('quantity') or 0)
+                    if t == 'buy':
+                        net += q
+                    elif t == 'sell':
+                        net -= q
+                keep.append(net > 1e-8)
             except Exception:
-                logging.warning("Could not filter zero-quantity holdings — showing all")
+                keep.append(True)  # on error, keep the row
+        latest = latest[keep].copy()
 
     # compute performance columns
     latest['cost_basis'] = latest.get('cost_basis', 0.0)
