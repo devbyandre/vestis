@@ -152,7 +152,7 @@ def _describe_alert(alert_type: str, params) -> str:
     alerts_df = alerts_df.merge(sec_df, on="security_id", how="left", suffixes=('_alert', '_sec'))
     alerts_df['symbol'] = alerts_df.get('symbol_sec', alerts_df.get('symbol_alert', '??')).fillna('??')
     alerts_df['name']   = alerts_df.get('name', pd.Series(dtype=str)).fillna('')
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.utcnow().replace(tzinfo=None)
     fired_count = 0
     for symbol, group in alerts_df.groupby('symbol'):
         sec_name = group['name'].iloc[0]
@@ -213,7 +213,7 @@ def run_immediate(cli_token=None, cli_chat=None):
     alerts_df = alerts_df.merge(sec_df, on="security_id", how="left", suffixes=('_alert', '_sec'))
     alerts_df['symbol'] = alerts_df.get('symbol_sec', alerts_df.get('symbol_alert', '??')).fillna('??')
     alerts_df['name']   = alerts_df.get('name', pd.Series(dtype=str)).fillna('')
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.utcnow().replace(tzinfo=None)
     fired_count = 0
     for symbol, group in alerts_df.groupby('symbol'):
         sec_name = group['name'].iloc[0]
@@ -271,7 +271,7 @@ def send_digest(cli_token=None, cli_chat=None, freq="daily"):
     if not token or not chat:
         logging.error("Telegram token/chat not configured.")
         return
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.utcnow().replace(tzinfo=None)
     key = f"last_digest_sent_{freq}"
     last_sent_raw = get_config(key)
     since_ts = pd.Timestamp(last_sent_raw) if last_sent_raw else now - pd.Timedelta(days=1)
