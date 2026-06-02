@@ -53,7 +53,6 @@ def send_telegram(token: str, chat_id: str, text: str, max_retries: int = 3) -> 
         days = p.get("days", 3)
         return f"📅 Earnings in ≤{days} days"
     if alert_type == "rsi":
-        # New format: single direction
         if "direction" in p:
             direction = p.get("direction", "above")
             thr = p.get("threshold", 70)
@@ -107,7 +106,6 @@ def _describe_alert(alert_type: str, params) -> str:
         days = p.get("days", 3)
         return f"📅 Earnings in ≤{days} days"
     if alert_type == "rsi":
-        # New format: single direction
         if "direction" in p:
             direction = p.get("direction", "above")
             thr = p.get("threshold", 70)
@@ -166,11 +164,9 @@ def _describe_alert(alert_type: str, params) -> str:
                 continue
             cooldown = int(alert.get('cooldown_seconds') or 14400)
             last_trigger = mw.last_trigger(alert_id)
-            if last_trigger:
-                lt = last_trigger.tz_localize(None) if last_trigger.tzinfo is not None else last_trigger
-                if (now - lt).total_seconds() < cooldown:
-                    logging.debug("Alert %s on cooldown", alert_id)
-                    continue
+            if last_trigger and (now - last_trigger).total_seconds() < cooldown:
+                logging.debug("Alert %s on cooldown", alert_id)
+                continue
             try:
                 triggered = mw.evaluate_alert(alert)
             except Exception:
@@ -193,11 +189,9 @@ def _describe_alert(alert_type: str, params) -> str:
         body += f"\n\n_{now.strftime('%Y-%m-%d %H:%M UTC')}_"
         if send_telegram(token, chat, body):
             for alert_id, _, al in fired_lines:
-                # Store _curr_side so RSI crossing detection works on next run
-                payload = {
-                    "note": al.get("_curr_side") or "immediate",
-                    "side": al.get("_curr_side") or "",
-                }
+                payload = {"note": "immediate"}
+                if al.get("_curr_side"):
+                    payload["side"] = al["_curr_side"]
                 mw.log_trigger(alert_id, payload)
             fired_count += len(fired_lines)
     logging.info("Immediate run complete — %d alerts fired", fired_count) """
@@ -219,7 +213,7 @@ def run_immediate(cli_token=None, cli_chat=None):
     alerts_df = alerts_df.merge(sec_df, on="security_id", how="left", suffixes=('_alert', '_sec'))
     alerts_df['symbol'] = alerts_df.get('symbol_sec', alerts_df.get('symbol_alert', '??')).fillna('??')
     alerts_df['name']   = alerts_df.get('name', pd.Series(dtype=str)).fillna('')
-    now = pd.Timestamp.utcnow().replace(tzinfo=None)  # force tz-naive
+    now = pd.Timestamp.utcnow()
     fired_count = 0
     for symbol, group in alerts_df.groupby('symbol'):
         sec_name = group['name'].iloc[0]
@@ -236,14 +230,9 @@ def run_immediate(cli_token=None, cli_chat=None):
             else:
                 cooldown = int(alert.get('cooldown_seconds') or 14400)
             last_trigger = mw.last_trigger(alert_id)
-            if last_trigger:
-                try:
-                    lt = last_trigger.replace(tzinfo=None)
-                    if (now - lt).total_seconds() < cooldown:
-                        logging.debug("Alert %s on cooldown", alert_id)
-                        continue
-                except Exception:
-                    pass
+            if last_trigger and (now - last_trigger).total_seconds() < cooldown:
+                logging.debug("Alert %s on cooldown", alert_id)
+                continue
             # split_pending alerts are always triggered (fire until split is recorded)
             if alert.get('alert_type') == 'split_pending':
                 triggered = True
@@ -270,11 +259,9 @@ def run_immediate(cli_token=None, cli_chat=None):
         body += f"\n\n_{now.strftime('%Y-%m-%d %H:%M UTC')}_"
         if send_telegram(token, chat, body):
             for alert_id, _, al in fired_lines:
-                # Store _curr_side so RSI crossing detection works on next run
-                payload = {
-                    "note": al.get("_curr_side") or "immediate",
-                    "side": al.get("_curr_side") or "",
-                }
+                payload = {"note": "immediate"}
+                if al.get("_curr_side"):
+                    payload["side"] = al["_curr_side"]
                 mw.log_trigger(alert_id, payload)
             fired_count += len(fired_lines)
     logging.info("Immediate run complete — %d alerts fired", fired_count)
@@ -284,15 +271,10 @@ def send_digest(cli_token=None, cli_chat=None, freq="daily"):
     if not token or not chat:
         logging.error("Telegram token/chat not configured.")
         return
-    now = pd.Timestamp.utcnow()  # tz-naive UTC
+    now = pd.Timestamp.utcnow()
     key = f"last_digest_sent_{freq}"
     last_sent_raw = get_config(key)
-    if last_sent_raw:
-        since_ts = pd.Timestamp(last_sent_raw)
-        if since_ts.tzinfo is not None:
-            since_ts = since_ts.tz_convert("UTC").tz_localize(None)
-    else:
-        since_ts = now - pd.Timedelta(days=1)
+    since_ts = pd.Timestamp(last_sent_raw) if last_sent_raw else now - pd.Timedelta(days=1)
     parts = []
 
     # ── Portfolio snapshot ─────────────────────────────────────────────────
