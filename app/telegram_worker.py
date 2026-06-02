@@ -219,7 +219,7 @@ def run_immediate(cli_token=None, cli_chat=None):
     alerts_df = alerts_df.merge(sec_df, on="security_id", how="left", suffixes=('_alert', '_sec'))
     alerts_df['symbol'] = alerts_df.get('symbol_sec', alerts_df.get('symbol_alert', '??')).fillna('??')
     alerts_df['name']   = alerts_df.get('name', pd.Series(dtype=str)).fillna('')
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.utcnow().replace(tzinfo=None)  # force tz-naive
     fired_count = 0
     for symbol, group in alerts_df.groupby('symbol'):
         sec_name = group['name'].iloc[0]
@@ -237,10 +237,13 @@ def run_immediate(cli_token=None, cli_chat=None):
                 cooldown = int(alert.get('cooldown_seconds') or 14400)
             last_trigger = mw.last_trigger(alert_id)
             if last_trigger:
-                lt = last_trigger.tz_localize(None) if last_trigger.tzinfo is not None else last_trigger
-                if (now - lt).total_seconds() < cooldown:
-                    logging.debug("Alert %s on cooldown", alert_id)
-                    continue
+                try:
+                    lt = last_trigger.replace(tzinfo=None)
+                    if (now - lt).total_seconds() < cooldown:
+                        logging.debug("Alert %s on cooldown", alert_id)
+                        continue
+                except Exception:
+                    pass
             # split_pending alerts are always triggered (fire until split is recorded)
             if alert.get('alert_type') == 'split_pending':
                 triggered = True
