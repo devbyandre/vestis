@@ -166,9 +166,11 @@ def _describe_alert(alert_type: str, params) -> str:
                 continue
             cooldown = int(alert.get('cooldown_seconds') or 14400)
             last_trigger = mw.last_trigger(alert_id)
-            if last_trigger and (now - last_trigger).total_seconds() < cooldown:
-                logging.debug("Alert %s on cooldown", alert_id)
-                continue
+            if last_trigger:
+                lt = last_trigger.tz_localize(None) if last_trigger.tzinfo is not None else last_trigger
+                if (now - lt).total_seconds() < cooldown:
+                    logging.debug("Alert %s on cooldown", alert_id)
+                    continue
             try:
                 triggered = mw.evaluate_alert(alert)
             except Exception:
@@ -234,9 +236,11 @@ def run_immediate(cli_token=None, cli_chat=None):
             else:
                 cooldown = int(alert.get('cooldown_seconds') or 14400)
             last_trigger = mw.last_trigger(alert_id)
-            if last_trigger and (now - last_trigger).total_seconds() < cooldown:
-                logging.debug("Alert %s on cooldown", alert_id)
-                continue
+            if last_trigger:
+                lt = last_trigger.tz_localize(None) if last_trigger.tzinfo is not None else last_trigger
+                if (now - lt).total_seconds() < cooldown:
+                    logging.debug("Alert %s on cooldown", alert_id)
+                    continue
             # split_pending alerts are always triggered (fire until split is recorded)
             if alert.get('alert_type') == 'split_pending':
                 triggered = True
@@ -277,10 +281,15 @@ def send_digest(cli_token=None, cli_chat=None, freq="daily"):
     if not token or not chat:
         logging.error("Telegram token/chat not configured.")
         return
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.utcnow()  # tz-naive UTC
     key = f"last_digest_sent_{freq}"
     last_sent_raw = get_config(key)
-    since_ts = pd.Timestamp(last_sent_raw) if last_sent_raw else now - pd.Timedelta(days=1)
+    if last_sent_raw:
+        since_ts = pd.Timestamp(last_sent_raw)
+        if since_ts.tzinfo is not None:
+            since_ts = since_ts.tz_convert("UTC").tz_localize(None)
+    else:
+        since_ts = now - pd.Timedelta(days=1)
     parts = []
 
     # ── Portfolio snapshot ─────────────────────────────────────────────────

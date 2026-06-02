@@ -1403,6 +1403,37 @@ def get_latest_holdings_snapshot(
           .last()
     ).copy()
 
+    # Filter out fully sold positions — after a sell the recompute produces
+    # no rows (qty<=0 rows are skipped), so the last row is pre-sell.
+    # We check the actual net quantity from transactions to catch this.
+    if not latest.empty and 'security_id' in latest.columns:
+        sec_ids = latest['security_id'].unique().tolist()
+        port_ids = latest['portfolio_id'].unique().tolist() if 'portfolio_id' in latest.columns else []
+        # For each security+portfolio pair, check net qty from transactions
+        # Only exclude if net qty is truly 0 or negative
+        if sec_ids and port_ids:
+            try:
+                net_qty_rows = []
+                for _, row in latest.iterrows():
+                    sid = int(row['security_id'])
+                    pid = int(row['portfolio_id'])
+                    tx_df = list_transactions_for_security(pid, sid)
+                    if tx_df is not None and not tx_df.empty:
+                        net = 0.0
+                        for _, tx in tx_df.iterrows():
+                            t = str(tx.get('type', '')).lower()
+                            q = float(tx.get('quantity') or 0)
+                            if t == 'buy':
+                                net += q
+                            elif t == 'sell':
+                                net -= q
+                        net_qty_rows.append(net > 1e-8)
+                    else:
+                        net_qty_rows.append(False)
+                latest = latest[net_qty_rows].copy()
+            except Exception:
+                logging.warning("Could not filter zero-quantity holdings — showing all")
+
     # compute performance columns
     latest['cost_basis'] = latest.get('cost_basis', 0.0)
     latest['abs_perf'] = latest['market_value'] - latest['cost_basis']
