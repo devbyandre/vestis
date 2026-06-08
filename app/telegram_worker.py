@@ -274,7 +274,12 @@ def send_digest(cli_token=None, cli_chat=None, freq="daily"):
     now = pd.Timestamp.utcnow().replace(tzinfo=None)
     key = f"last_digest_sent_{freq}"
     last_sent_raw = get_config(key)
-    since_ts = pd.Timestamp(last_sent_raw) if last_sent_raw else now - pd.Timedelta(days=1)
+    if last_sent_raw:
+        since_ts = pd.Timestamp(last_sent_raw)
+        if since_ts.tzinfo is not None:
+            since_ts = since_ts.tz_convert("UTC").tz_localize(None)
+    else:
+        since_ts = now - pd.Timedelta(days=1)
     parts = []
 
     # ── Portfolio snapshot ─────────────────────────────────────────────────
@@ -314,6 +319,7 @@ def send_digest(cli_token=None, cli_chat=None, freq="daily"):
                         day_chg = (curr_price - prev_price) / prev_price * 100
                         movers.append({
                             'symbol': sym,
+                            'name': r.get('security_label') or r.get('name') or sym,
                             'day_chg': day_chg,
                             'market_value': float(r.get('market_value', 0))
                         })
@@ -324,10 +330,12 @@ def send_digest(cli_token=None, cli_chat=None, freq="daily"):
                     bot_day = movers_df.tail(3)
                     parts.append("📈 *Today's top movers:*")
                     for _, r in top_day.iterrows():
-                        parts.append(f"  • {_md(r['symbol'])}: {r['day_chg']:+.1f}%")
+                        label = r.get('name') or r['symbol']
+                        parts.append(f"  • {_md(label)}: {r['day_chg']:+.1f}%")
                     parts.append("📉 *Today's biggest drops:*")
                     for _, r in bot_day.iterrows():
-                        parts.append(f"  • {_md(r['symbol'])}: {r['day_chg']:+.1f}%")
+                        label = r.get('name') or r['symbol']
+                        parts.append(f"  • {_md(label)}: {r['day_chg']:+.1f}%")
                     parts.append("")
             except Exception:
                 logging.exception("Error building daily movers for digest")
@@ -341,11 +349,13 @@ def send_digest(cli_token=None, cli_chat=None, freq="daily"):
                 parts.append("🏆 *Best performers (all-time):*")
                 for _, r in top3.iterrows():
                     mv = float(r.get('market_value', 0))
-                    parts.append(f"  • {_md(str(r.get('symbol','?')))}: {r['pnl_pct']:+.1f}% (€{mv:,.0f})")
+                    label = r.get('security_label') or r.get('name') or r.get('symbol', '?')
+                    parts.append(f"  • {_md(str(label))}: {r['pnl_pct']:+.1f}% (€{mv:,.0f})")
                 parts.append("⚠️ *Underperformers (all-time):*")
                 for _, r in bot3.iterrows():
                     mv = float(r.get('market_value', 0))
-                    parts.append(f"  • {_md(str(r.get('symbol','?')))}: {r['pnl_pct']:+.1f}% (€{mv:,.0f})")
+                    label = r.get('security_label') or r.get('name') or r.get('symbol', '?')
+                    parts.append(f"  • {_md(str(label))}: {r['pnl_pct']:+.1f}% (€{mv:,.0f})")
                 parts.append("")
 
             # ── Upcoming earnings (next 7 days) ──────────────────────────
@@ -366,14 +376,16 @@ def send_digest(cli_token=None, cli_chat=None, freq="daily"):
                                 edt = pd.Timestamp(ts).replace(tzinfo=None)
                                 diff = (edt - now.replace(tzinfo=None)).days
                                 if 0 <= diff <= 7:
-                                    earnings_soon.append((sym, diff, edt.strftime('%b %d')))
+                                    sec_name = r.get('security_label') or r.get('name') or sym
+                                    earnings_soon.append((sym, sec_name, diff, edt.strftime('%b %d')))
                             except Exception:
                                 pass
                 if earnings_soon:
                     parts.append("📅 *Earnings coming up:*")
-                    for sym, days, date_str in sorted(earnings_soon, key=lambda x: x[1]):
+                    for sym, name, days, date_str in sorted(earnings_soon, key=lambda x: x[2]):
                         label = "tomorrow" if days == 1 else f"in {days} days" if days > 1 else "today"
-                        parts.append(f"  • {_md(sym)}: {date_str} ({label})")
+                        display = name or sym
+                        parts.append(f"  • {_md(display)}: {date_str} ({label})")
                     parts.append("")
             except Exception:
                 logging.exception("Error building earnings calendar for digest")
@@ -390,7 +402,7 @@ def send_digest(cli_token=None, cli_chat=None, freq="daily"):
             for r in rows:
                 try:
                     info = mw.get_security_basic(r.get('security_id'))
-                    sym  = info.get('symbol', '?')
+                    sym  = info.get('name') or info.get('symbol', '?')
                 except Exception:
                     sym = '?'
                 desc = _describe_alert(r.get('alert_type', ''), r.get('params', '{}'))
