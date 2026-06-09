@@ -10,6 +10,12 @@ RUN pip install --no-cache-dir --prefer-binary \
     -r /srv/requirements-api.txt
 
 COPY api/main.py /srv/api_main.py
+# Also copy app files into image as fallback — volume will override at runtime
+COPY app/middleware.py /app/middleware.py
+COPY app/db_utils.py /app/db_utils.py
+COPY app/config_utils.py /app/config_utils.py
+COPY app/telegram_client.py /app/telegram_client.py
+COPY app/article_utils.py /app/article_utils.py
 
 ENV PYTHONPATH=/app
 
