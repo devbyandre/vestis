@@ -11,6 +11,8 @@ RUN pip install --no-cache-dir --prefer-binary \
 
 COPY api/main.py /srv/api_main.py
 
+ENV PYTHONPATH=/app
+
 EXPOSE 8503
 
 CMD ["uvicorn", "api_main:app", "--host", "0.0.0.0", "--port", "8503", "--workers", "2"]
