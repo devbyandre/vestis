@@ -112,7 +112,7 @@ services:
     environment:
       - PYTHONPATH=/app
     volumes:
-      - ./app:/app
+      - .:/app
       - ./data:/data
     ports:
       - "8505:8503"
