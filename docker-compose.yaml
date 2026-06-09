@@ -117,7 +117,7 @@ services:
     ports:
       - "8503:8503"
     networks:
-      - coolify
+      - coolify_net
       - default
     depends_on:
       - db
@@ -130,7 +130,7 @@ services:
     ports:
       - "8504:8504"
     networks:
-      - coolify
+      - coolify_net
       - default
     depends_on:
       - api
