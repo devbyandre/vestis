@@ -1,0 +1,83 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { box-sizing: border-box; }
+  body { background: #0a0a0f; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #111118; }
+  ::-webkit-scrollbar-thumb { background: #2a2a3a; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3a3a4a; }
+}
+
+@layer components {
+  .card {
+    @apply bg-surface-1 border border-surface-3 rounded-xl p-4;
+  }
+  .card-sm {
+    @apply bg-surface-1 border border-surface-3 rounded-lg p-3;
+  }
+  .btn {
+    @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium
+           transition-all duration-150 cursor-pointer select-none;
+  }
+  .btn-primary {
+    @apply btn bg-accent hover:bg-accent-dim text-white;
+  }
+  .btn-ghost {
+    @apply btn bg-transparent hover:bg-surface-3 text-gray-300 border border-surface-3;
+  }
+  .btn-danger {
+    @apply btn bg-danger/10 hover:bg-danger/20 text-danger border border-danger/20;
+  }
+  .input {
+    @apply bg-surface-2 border border-surface-3 rounded-lg px-3 py-1.5 text-sm
+           text-gray-100 focus:outline-none focus:border-accent/60 transition-colors w-full;
+  }
+  .select {
+    @apply input appearance-none cursor-pointer;
+  }
+  .label {
+    @apply text-xs font-medium text-gray-400 mb-1 block;
+  }
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium;
+  }
+  .badge-green {
+    @apply badge bg-success/10 text-success;
+  }
+  .badge-red {
+    @apply badge bg-danger/10 text-danger;
+  }
+  .badge-yellow {
+    @apply badge bg-warning/10 text-warning;
+  }
+  .badge-blue {
+    @apply badge bg-accent/10 text-accent-bright;
+  }
+  .metric-card {
+    @apply card flex flex-col gap-1;
+  }
+  .metric-value {
+    @apply text-2xl font-semibold tabular-nums;
+  }
+  .metric-label {
+    @apply text-xs text-gray-500;
+  }
+  .table-row {
+    @apply border-b border-surface-2 hover:bg-surface-2/50 transition-colors;
+  }
+  .th {
+    @apply text-xs font-medium text-gray-500 uppercase tracking-wider px-3 py-2;
+  }
+  .td {
+    @apply text-sm px-3 py-2;
+  }
+  .pos { @apply text-success; }
+  .neg { @apply text-danger; }
+}
+
+/* Plotly overrides for dark theme */
+.js-plotly-plot .plotly .bg { fill: transparent !important; }
+.js-plotly-plot .plotly .main-svg { background: transparent !important; }
