@@ -10,13 +10,7 @@ RUN pip install --no-cache-dir --prefer-binary \
     -r /srv/requirements-api.txt
 
 COPY api/main.py /srv/api_main.py
-COPY app/middleware.py /app/middleware.py
-COPY app/db_utils.py /app/db_utils.py
-COPY app/config_utils.py /app/config_utils.py
-COPY app/telegram_client.py /app/telegram_client.py
-COPY app/article_utils.py /app/article_utils.py
-COPY app/data_fetcher.py /app/data_fetcher.py
-COPY app/telegram_worker.py /app/telegram_worker.py
+COPY app/ /app/
 
 ENV PYTHONPATH=/app
 
