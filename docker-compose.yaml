@@ -113,10 +113,8 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-stockapp}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-stockapp}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
-    environment:
-      - PYTHONPATH=/app
+      PYTHONPATH: /app
     volumes:
-      - .:/app
       - ./data:/data
     ports:
       - "8505:8503"
