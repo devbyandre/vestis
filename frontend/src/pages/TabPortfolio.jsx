@@ -19,6 +19,17 @@ const PLOTLY_BASE = {
   yaxis: { gridcolor: '#1a1a24', linecolor: '#2a2a3a' },
 }
 
+const HOLDINGS_COLS = [
+  { key: 'security_label', label: 'Security' },
+  { key: 'quantity', label: 'Qty', align: 'right', render: v => fmt.num(v, 4) },
+  { key: 'avg_cost_per_share', label: 'Avg Cost', align: 'right', render: v => fmt.currency(v, 2) },
+  { key: 'cost_basis', label: 'Total Cost', align: 'right', render: v => fmt.currency(v) },
+  { key: 'current_price', label: 'Price', align: 'right', render: v => fmt.currency(v, 2) },
+  { key: 'market_value', label: 'Market Value', align: 'right', render: v => fmt.currency(v) },
+  { key: 'abs_perf', label: 'Abs P&L', align: 'right', render: v => <span className={pnlColor(v)}>{fmt.currency(v)}</span> },
+  { key: 'rel_perf', label: 'Rel P&L', align: 'right', render: v => <PnlBadge value={v} multiplier={1} /> },
+]
+
 function PerfCharts({ ts }) {
   const daily = useMemo(() => {
     if (!ts?.length) return []
@@ -180,16 +191,7 @@ function PerfCharts({ ts }) {
   )
 }
 
-const HOLDINGS_COLS = [
-  { key: 'security_label', label: 'Security' },
-  { key: 'quantity', label: 'Qty', align: 'right', render: v => fmt.num(v, 4) },
-  { key: 'avg_cost_per_share', label: 'Avg Cost', align: 'right', render: v => fmt.currency(v, 2) },
-  { key: 'cost_basis', label: 'Total Cost', align: 'right', render: v => fmt.currency(v) },
-  { key: 'current_price', label: 'Price', align: 'right', render: v => fmt.currency(v, 2) },
-  { key: 'market_value', label: 'Market Value', align: 'right', render: v => fmt.currency(v) },
-  { key: 'abs_perf', label: 'Abs P&L', align: 'right', render: v => <span className={pnlColor(v)}>{fmt.currency(v)}</span> },
-  { key: 'rel_perf', label: 'Rel P&L', align: 'right', render: v => <PnlBadge value={v} multiplier={1} /> },
-]
+
 
 export default function TabPortfolio() {
   const [portfolioIds, setPortfolioIds] = useState([])
