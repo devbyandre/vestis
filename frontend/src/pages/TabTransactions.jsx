@@ -1,32 +1,34 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, lazy, Suspense } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Pencil, Trash2, GitMerge } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { transactionsApi, portfolioApi, securitiesApi } from '../lib/api'
 import { qk } from '../lib/queryClient'
-import { fmt } from '../lib/utils'
-import { LoadingOverlay, ErrorMsg, Modal, ConfirmModal, Pagination, SectionHeader, Input, Select } from '../components/ui'
+import { fmt, plotlyConfig } from '../lib/utils'
+import { LoadingOverlay, ErrorMsg, Modal, ConfirmModal, SortableTable, SectionHeader, Input, Select, Expander, MetricCard } from '../components/ui'
 
-const PAGE_SIZE = 20
+const Plot = lazy(() => import('react-plotly.js'))
+const BASE = {
+  paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+  font: { color: '#9ca3af', size: 11 }, margin: { l: 50, r: 20, t: 36, b: 40 },
+  xaxis: { gridcolor: '#1a1a24', linecolor: '#2a2a3a' },
+  yaxis: { gridcolor: '#1a1a24', linecolor: '#2a2a3a' },
+  hovermode: 'x unified',
+  hoverlabel: { bgcolor: '#1a1a24', bordercolor: '#2a2a3a', font: { color: '#e5e7eb', size: 11 } },
+}
+function LazyPlot(props) {
+  return <Suspense fallback={<div className="text-gray-500 text-xs py-4">Loading chart…</div>}><Plot {...props} /></Suspense>
+}
 
 function TxForm({ initial, portfolios, securities, onSubmit, onClose }) {
   const [form, setForm] = useState(initial || {
-    portfolio_id: portfolios[0]?.id || '',
-    symbol: '',
+    portfolio_id: portfolios[0]?.id || '', symbol: '',
     tx_date: new Date().toISOString().slice(0, 10),
-    tx_type: 'buy',
-    quantity: '',
-    price: '',
-    fees: '0',
+    tx_type: 'buy', quantity: '', price: '', fees: '0',
   })
   const isSplit = form.tx_type === 'split'
-
   const set = (k) => (v) => setForm(f => ({ ...f, [k]: v }))
-
-  const handleSubmit = (e) => {
-    e.preventDefault()
-    onSubmit(form)
-  }
+  const handleSubmit = (e) => { e.preventDefault(); onSubmit(form) }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-3">
@@ -70,32 +72,24 @@ function TxForm({ initial, portfolios, securities, onSubmit, onClose }) {
 
 export default function TabTransactions() {
   const qc = useQueryClient()
-  const [page, setPage] = useState(1)
-  const [search, setSearch] = useState('')
   const [portfolioFilter, setPortfolioFilter] = useState('')
   const [editTx, setEditTx] = useState(null)
   const [deleteTx, setDeleteTx] = useState(null)
   const [showAdd, setShowAdd] = useState(false)
   const [showSplit, setShowSplit] = useState(false)
 
+  const pfIds = portfolioFilter ? [Number(portfolioFilter)] : null
+
   const { data: portfolios = [] } = useQuery({ queryKey: qk.portfolios(), queryFn: portfolioApi.list })
   const { data: securities = [] } = useQuery({ queryKey: qk.securities(), queryFn: securitiesApi.list })
   const { data: transactions = [], isLoading, error } = useQuery({
-    queryKey: qk.transactions(portfolioFilter || null),
-    queryFn: () => transactionsApi.list(portfolioFilter ? [Number(portfolioFilter)] : null),
+    queryKey: qk.transactions(pfIds),
+    queryFn: () => transactionsApi.list(pfIds),
   })
-
-  const filtered = useMemo(() => {
-    let rows = transactions
-    if (search) {
-      const q = search.toLowerCase()
-      rows = rows.filter(r => (r.symbol || r.yahoo_ticker || '').toLowerCase().includes(q) ||
-        (r.security_name || '').toLowerCase().includes(q))
-    }
-    return rows.sort((a, b) => b.date > a.date ? 1 : -1)
-  }, [transactions, search])
-
-  const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  const { data: summary } = useQuery({
+    queryKey: qk.txSummary(pfIds),
+    queryFn: () => transactionsApi.summary(pfIds),
+  })
 
   const addMut = useMutation({
     mutationFn: (form) => {
@@ -104,138 +98,144 @@ export default function TabTransactions() {
       }
       return transactionsApi.add({ ...form, portfolio_id: Number(form.portfolio_id), quantity: Number(form.quantity), price: Number(form.price), fees: Number(form.fees) })
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['transactions'] }); qc.invalidateQueries({ queryKey: ['holdings'] }); setShowAdd(false); toast.success('Transaction added') },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['transactions'] }); qc.invalidateQueries({ queryKey: ['holdings'] }); setShowAdd(false); setShowSplit(false); toast.success('Transaction added') },
     onError: (e) => toast.error(e.message),
   })
-
   const editMut = useMutation({
     mutationFn: ({ id, form }) => transactionsApi.edit(id, { ...form, portfolio_id: Number(form.portfolio_id), quantity: Number(form.quantity), price: Number(form.price), fees: Number(form.fees) }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['transactions'] }); qc.invalidateQueries({ queryKey: ['holdings'] }); setEditTx(null); toast.success('Transaction updated') },
     onError: (e) => toast.error(e.message),
   })
-
   const deleteMut = useMutation({
     mutationFn: (id) => transactionsApi.delete(id),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['transactions'] }); qc.invalidateQueries({ queryKey: ['holdings'] }); toast.success('Deleted') },
     onError: (e) => toast.error(e.message),
   })
 
-  const typeLabel = (t, qty) => {
+  // Trends charts data
+  const trends = useMemo(() => {
+    if (!transactions.length) return null
+    const sorted = [...transactions]
+      .filter(t => t.tx_type !== 'split')
+      .sort((a, b) => (a.tx_date || a.date) < (b.tx_date || b.date) ? -1 : 1)
+    let cumQty = 0, cumFees = 0, cumBuys = 0, cumSells = 0
+    const dates = [], qtyArr = [], feesArr = [], buysArr = [], sellsArr = []
+    sorted.forEach(t => {
+      cumQty += (t.quantity || 0)
+      cumFees += (t.tx_cost || 0)
+      if (t.tx_type === 'buy') cumBuys += (t.quantity || 0)
+      if (t.tx_type === 'sell') cumSells += (t.quantity || 0)
+      dates.push(t.tx_date || t.date)
+      qtyArr.push(cumQty); feesArr.push(cumFees); buysArr.push(cumBuys); sellsArr.push(cumSells)
+    })
+    return { dates, qtyArr, feesArr, buysArr, sellsArr }
+  }, [transactions])
+
+  const typeBadge = (t, qty) => {
     if (t === 'buy') return <span className="badge badge-green">↑ BUY</span>
     if (t === 'sell') return <span className="badge badge-red">↓ SELL</span>
-    if (t === 'split') return <span className="badge badge-yellow">🔀 SPLIT ×{Number(qty).toFixed(2)}</span>
+    if (t === 'split') return <span className="badge badge-yellow">🔀 ×{Number(qty).toFixed(2)}</span>
     return <span className="badge">{t}</span>
   }
 
-  // Summary metrics
-  const totalBuys = transactions.filter(r => r.tx_type === 'buy').reduce((s, r) => s + (r.total_cost || 0), 0)
-  const totalSells = transactions.filter(r => r.tx_type === 'sell').reduce((s, r) => s + (r.total_cost || 0), 0)
-  const totalFees = transactions.reduce((s, r) => s + (r.tx_cost || 0), 0)
+  const COLS = [
+    { key: 'tx_date', label: 'Date', render: (v, r) => fmt.date(v || r.date) },
+    { key: 'security_label', label: 'Security', render: (v, r) => v || r.symbol || r.yahoo_ticker },
+    { key: 'portfolio', label: 'Portfolio', render: (v, r) => v || r.portfolio_name || '—' },
+    { key: 'tx_type', label: 'Type', render: (v, r) => typeBadge(v, r.quantity) },
+    { key: 'quantity', label: 'Qty', align: 'right', render: (v, r) => r.tx_type === 'split' ? `×${Number(v).toFixed(4)}` : fmt.num(v, 4) },
+    { key: 'price', label: 'Price', align: 'right', render: (v, r) => r.tx_type === 'split' || !v ? '—' : fmt.currency(v, 2) },
+    { key: 'tx_cost', label: 'Fees', align: 'right', render: (v, r) => r.tx_type === 'split' || !v ? '—' : fmt.currency(v, 2) },
+    { key: 'total_cost', label: 'Total', align: 'right', render: (v, r) => r.tx_type === 'split' || !v ? '—' : fmt.currency(v, 2) },
+    { key: '_edit', label: '', render: (_, r) => (
+      <button className="text-gray-600 hover:text-accent transition-colors" onClick={() => setEditTx(r)}><Pencil size={12} /></button>
+    ) },
+    { key: '_del', label: '', render: (_, r) => (
+      <button className="text-gray-600 hover:text-danger transition-colors" onClick={() => setDeleteTx(r)}><Trash2 size={12} /></button>
+    ) },
+  ]
 
   return (
     <div className="space-y-4">
-      <SectionHeader
-        title="Transactions"
-        action={
-          <div className="flex gap-2">
-            <button className="btn-ghost" onClick={() => setShowSplit(true)}>
-              <GitMerge size={14} /> Record Split
-            </button>
-            <button className="btn-primary" onClick={() => setShowAdd(true)}>
-              <Plus size={14} /> Add
-            </button>
-          </div>
-        }
-      />
+      <SectionHeader title="Transactions" action={
+        <div className="flex gap-2">
+          <button className="btn-ghost" onClick={() => setShowSplit(true)}><GitMerge size={14} /> Record Split</button>
+          <button className="btn-primary" onClick={() => setShowAdd(true)}><Plus size={14} /> Add</button>
+        </div>
+      } />
 
-      {/* Summary metrics */}
-      <div className="grid grid-cols-3 gap-3">
-        <div className="metric-card"><div className="metric-label">Total Buys</div><div className="metric-value text-green-400">{fmt.currency(totalBuys)}</div></div>
-        <div className="metric-card"><div className="metric-label">Total Sells</div><div className="metric-value text-red-400">{fmt.currency(totalSells)}</div></div>
-        <div className="metric-card"><div className="metric-label">Total Fees</div><div className="metric-value">{fmt.currency(totalFees)}</div></div>
-      </div>
+      {/* 7 summary metrics */}
+      {summary && (
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+          <MetricCard label="Transactions" value={summary.count} />
+          <MetricCard label="Total Qty" value={fmt.num(summary.total_quantity, 2)} />
+          <MetricCard label="Total Buys" value={fmt.currency(summary.total_buys)} color="text-green-400" />
+          <MetricCard label="# Buys" value={summary.num_buys} />
+          <MetricCard label="Total Sales" value={fmt.currency(summary.total_sells)} color="text-red-400" />
+          <MetricCard label="# Sells" value={summary.num_sells} />
+          <MetricCard label="Total Fees" value={fmt.currency(summary.total_fees)} />
+        </div>
+      )}
 
-      {/* Filters */}
+      {/* Portfolio filter */}
       <div className="flex gap-2 items-center">
-        <input className="input max-w-xs" placeholder="Search symbol or name…" value={search}
-          onChange={e => { setSearch(e.target.value); setPage(1) }} />
         <select className="select max-w-xs" value={portfolioFilter} onChange={e => setPortfolioFilter(e.target.value)}>
           <option value="">All portfolios</option>
           {portfolios.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
       </div>
 
+      {/* Trends */}
+      {trends && (
+        <Expander title="Transaction Trends & Fee Analysis">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <LazyPlot
+              data={[
+                { x: trends.dates, y: trends.qtyArr, name: 'Cumulative Qty', line: { color: '#6366f1' }, type: 'scatter' },
+                { x: trends.dates, y: trends.feesArr, name: 'Cumulative Fees (€)', line: { color: '#f59e0b' }, yaxis: 'y2', type: 'scatter' },
+              ]}
+              layout={{ ...BASE, title: { text: 'Cumulative Quantity & Fees', font: { color: '#d1d5db', size: 13 } },
+                yaxis2: { overlaying: 'y', side: 'right', gridcolor: 'transparent', tickprefix: '€' }, height: 280 }}
+              config={plotlyConfig} style={{ width: '100%' }} useResizeHandler />
+            <LazyPlot
+              data={[
+                { x: trends.dates, y: trends.buysArr, name: 'Cumulative Buys', line: { color: '#22c55e' }, type: 'scatter' },
+                { x: trends.dates, y: trends.sellsArr, name: 'Cumulative Sells', line: { color: '#ef4444' }, type: 'scatter' },
+              ]}
+              layout={{ ...BASE, title: { text: 'Cumulative Buys vs Sells (shares)', font: { color: '#d1d5db', size: 13 } }, height: 280 }}
+              config={plotlyConfig} style={{ width: '100%' }} useResizeHandler />
+          </div>
+        </Expander>
+      )}
+
       {/* Table */}
-      <div className="card overflow-hidden p-0">
-        {isLoading ? <div className="p-4"><LoadingOverlay /></div> : error ? <div className="p-4"><ErrorMsg error={error} /></div> : (
-          <>
-            <table className="w-full text-left">
-              <thead>
-                <tr className="border-b border-surface-3">
-                  {['Date','Security','Portfolio','Type','Qty','Price','Fees','Total','',''].map((h, i) => (
-                    <th key={i} className="th">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {paged.map((row, i) => {
-                  const isSplit = row.tx_type === 'split'
-                  return (
-                    <tr key={row.id ?? i} className="table-row">
-                      <td className="td text-gray-400">{fmt.date(row.date)}</td>
-                      <td className="td font-medium">{row.security_label || row.symbol || row.yahoo_ticker}</td>
-                      <td className="td text-gray-500">{row.portfolio_name || row.portfolio}</td>
-                      <td className="td">{typeLabel(row.tx_type, row.quantity)}</td>
-                      <td className="td text-right font-mono">{isSplit ? `×${Number(row.quantity).toFixed(4)}` : fmt.num(row.quantity, 4)}</td>
-                      <td className="td text-right font-mono">{isSplit || !row.price ? '—' : fmt.currency(row.price, 2)}</td>
-                      <td className="td text-right font-mono">{isSplit || !row.tx_cost ? '—' : fmt.currency(row.tx_cost, 2)}</td>
-                      <td className="td text-right font-mono">{isSplit || !row.total_cost ? '—' : fmt.currency(row.total_cost, 2)}</td>
-                      <td className="td">
-                        <button className="text-gray-600 hover:text-accent transition-colors" onClick={() => setEditTx(row)}>
-                          <Pencil size={12} />
-                        </button>
-                      </td>
-                      <td className="td">
-                        <button className="text-gray-600 hover:text-danger transition-colors" onClick={() => setDeleteTx(row)}>
-                          <Trash2 size={12} />
-                        </button>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-            <div className="px-4 py-2 border-t border-surface-3">
-              <Pagination page={page} total={filtered.length} pageSize={PAGE_SIZE} onChange={setPage} />
-            </div>
-          </>
+      <div className="card overflow-hidden">
+        {isLoading ? <LoadingOverlay /> : error ? <ErrorMsg error={error} /> : (
+          <SortableTable
+            columns={COLS}
+            data={transactions}
+            defaultSort={{ key: 'tx_date', asc: false }}
+            searchable searchKeys={['security_label', 'symbol', 'portfolio', 'tx_type']}
+            pageSize={20}
+            exportable exportName="transactions"
+          />
         )}
       </div>
 
-      {/* Add modal */}
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Transaction">
-        <TxForm portfolios={portfolios} securities={securities}
-          onSubmit={(form) => addMut.mutate(form)} onClose={() => setShowAdd(false)} />
+        <TxForm portfolios={portfolios} securities={securities} onSubmit={(f) => addMut.mutate(f)} onClose={() => setShowAdd(false)} />
       </Modal>
-
-      {/* Split modal */}
       <Modal open={showSplit} onClose={() => setShowSplit(false)} title="Record Stock Split">
         <TxForm initial={{ tx_type: 'split', tx_date: new Date().toISOString().slice(0, 10), portfolio_id: portfolios[0]?.id, quantity: '2', symbol: '' }}
-          portfolios={portfolios} securities={securities}
-          onSubmit={(form) => addMut.mutate(form)} onClose={() => setShowSplit(false)} />
+          portfolios={portfolios} securities={securities} onSubmit={(f) => addMut.mutate(f)} onClose={() => setShowSplit(false)} />
       </Modal>
-
-      {/* Edit modal */}
       {editTx && (
         <Modal open={!!editTx} onClose={() => setEditTx(null)} title={`Edit Transaction #${editTx.id}`}>
-          <TxForm initial={{ portfolio_id: editTx.portfolio_id, symbol: editTx.symbol || editTx.yahoo_ticker, tx_date: editTx.date?.slice(0, 10), tx_type: editTx.tx_type, quantity: editTx.quantity, price: editTx.price, fees: editTx.tx_cost || 0 }}
+          <TxForm initial={{ portfolio_id: editTx.portfolio_id, symbol: editTx.symbol || editTx.yahoo_ticker, tx_date: (editTx.tx_date || editTx.date)?.slice(0, 10), tx_type: editTx.tx_type, quantity: editTx.quantity, price: editTx.price, fees: editTx.tx_cost || 0 }}
             portfolios={portfolios} securities={securities}
-            onSubmit={(form) => editMut.mutate({ id: editTx.id, form })}
-            onClose={() => setEditTx(null)} />
+            onSubmit={(f) => editMut.mutate({ id: editTx.id, form: f })} onClose={() => setEditTx(null)} />
         </Modal>
       )}
-
-      {/* Delete confirm */}
       <ConfirmModal open={!!deleteTx} onClose={() => setDeleteTx(null)}
         onConfirm={() => deleteMut.mutate(deleteTx.id)} danger
         title="Delete transaction"

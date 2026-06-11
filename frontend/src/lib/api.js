@@ -46,12 +46,16 @@ export const holdingsApi = {
     }),
   riskTimeseries: (portfolio_ids) =>
     get('/holdings/risk-timeseries', { portfolio_ids: portfolio_ids?.join(',') }),
+  metrics: (portfolio_ids) =>
+    get('/holdings/metrics', { portfolio_ids: portfolio_ids?.join(',') }),
 }
 
 // ── Transactions ──────────────────────────────────────────────────────────────
 export const transactionsApi = {
   list: (portfolio_ids) =>
     get('/transactions', { portfolio_ids: portfolio_ids?.join(',') }),
+  summary: (portfolio_ids) =>
+    get('/transactions/summary', { portfolio_ids: portfolio_ids?.join(',') }),
   add: (tx) => post('/transactions', tx),
   edit: (tx_id, tx) => put(`/transactions/${tx_id}`, tx),
   delete: (tx_id) => del(`/transactions/${tx_id}`),
@@ -68,6 +72,8 @@ export const analyticsApi = {
     get('/analytics/rebalancing', { portfolio_ids: portfolio_ids?.join(',') }),
   indicators: (symbol, opts = {}) =>
     get(`/analytics/indicators/${symbol}`, opts),
+  revenuesSummary: (portfolio_ids, year) =>
+    get('/analytics/revenues-summary', { portfolio_ids: portfolio_ids?.join(','), year }),
   crossovers: (symbol, short, long_) =>
     get(`/analytics/crossovers/${symbol}`, { short, long_ }),
   localExtrema: (symbol, lookback_days) =>
@@ -97,6 +103,12 @@ export const planningApi = {
   taxonomy: () => get('/planning/taxonomy'),
   portfolioSymbols: (portfolio_ids) =>
     get('/planning/portfolio-symbols', { portfolio_ids: portfolio_ids?.join(',') }),
+  rebalancing: (portfolio_ids, retirement_year) =>
+    get('/analytics/rebalancing', { portfolio_ids: portfolio_ids?.join(','), retirement_year }),
+  allocationOverTime: (portfolio_ids) =>
+    get('/planning/allocation-over-time', { portfolio_ids: portfolio_ids?.join(',') }),
+  riskOverTime: (portfolio_ids) =>
+    get('/planning/risk-over-time', { portfolio_ids: portfolio_ids?.join(',') }),
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────

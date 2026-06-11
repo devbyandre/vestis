@@ -1,5 +1,5 @@
-import { Loader2, AlertCircle, X, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
-import { useState } from 'react'
+import { Loader2, AlertCircle, X, ChevronUp, ChevronDown, ChevronsUpDown, Download } from 'lucide-react'
+import { useState, useMemo } from 'react'
 import { clsx } from 'clsx'
 
 // ── Loading states ────────────────────────────────────────────────────────────
@@ -111,55 +111,131 @@ export function MetricCard({ label, value, sub, color = '', icon }) {
 
 // ── Sortable table ────────────────────────────────────────────────────────────
 
-export function SortableTable({ columns, data, defaultSort, className = '' }) {
+export function SortableTable({
+  columns, data, defaultSort, className = '',
+  searchable = false, searchKeys = null, pageSize = 0,
+  exportable = false, exportName = 'data',
+}) {
   const [sort, setSort] = useState(defaultSort || { key: columns[0]?.key, asc: true })
+  const [query, setQuery] = useState('')
+  const [page, setPage] = useState(1)
 
-  const sorted = [...data].sort((a, b) => {
-    const va = a[sort.key] ?? (sort.asc ? -Infinity : Infinity)
-    const vb = b[sort.key] ?? (sort.asc ? -Infinity : Infinity)
-    if (typeof va === 'string') return sort.asc ? va.localeCompare(vb) : vb.localeCompare(va)
-    return sort.asc ? va - vb : vb - va
-  })
+  // Search filter
+  const filtered = useMemo(() => {
+    if (!searchable || !query.trim()) return data
+    const q = query.toLowerCase()
+    const keys = searchKeys || columns.map(c => c.key)
+    return data.filter(row =>
+      keys.some(k => String(row[k] ?? '').toLowerCase().includes(q))
+    )
+  }, [data, query, searchable, searchKeys, columns])
+
+  // Sort
+  const sorted = useMemo(() => {
+    return [...filtered].sort((a, b) => {
+      const va = a[sort.key] ?? (sort.asc ? -Infinity : Infinity)
+      const vb = b[sort.key] ?? (sort.asc ? -Infinity : Infinity)
+      if (typeof va === 'string' || typeof vb === 'string') {
+        return sort.asc
+          ? String(va).localeCompare(String(vb))
+          : String(vb).localeCompare(String(va))
+      }
+      return sort.asc ? va - vb : vb - va
+    })
+  }, [filtered, sort])
+
+  // Pagination
+  const pages = pageSize > 0 ? Math.max(1, Math.ceil(sorted.length / pageSize)) : 1
+  const pageData = pageSize > 0
+    ? sorted.slice((page - 1) * pageSize, page * pageSize)
+    : sorted
 
   const toggleSort = (key) => {
     setSort(s => s.key === key ? { key, asc: !s.asc } : { key, asc: true })
   }
 
+  const exportCsv = () => {
+    const header = columns.map(c => `"${c.label}"`).join(',')
+    const rows = sorted.map(row =>
+      columns.map(c => {
+        const raw = c.exportValue ? c.exportValue(row[c.key], row) : row[c.key]
+        return `"${String(raw ?? '').replace(/"/g, '""')}"`
+      }).join(',')
+    )
+    const csv = [header, ...rows].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${exportName}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   return (
-    <div className={clsx('overflow-x-auto', className)}>
-      <table className="w-full text-left">
-        <thead>
-          <tr className="border-b border-surface-3">
-            {columns.map(col => (
-              <th
-                key={col.key}
-                className={clsx('th cursor-pointer select-none hover:text-gray-300 transition-colors', col.align === 'right' ? 'text-right' : '')}
-                onClick={() => toggleSort(col.key)}
-              >
-                <span className="inline-flex items-center gap-1">
-                  {col.label}
-                  {sort.key === col.key
-                    ? (sort.asc ? <ChevronUp size={10} /> : <ChevronDown size={10} />)
-                    : <ChevronsUpDown size={10} className="opacity-30" />}
-                </span>
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.map((row, i) => (
-            <tr key={i} className="table-row">
+    <div className={clsx('', className)}>
+      {(searchable || exportable) && (
+        <div className="flex items-center justify-between gap-2 mb-3">
+          {searchable ? (
+            <input
+              className="input max-w-xs text-sm"
+              placeholder="Search…"
+              value={query}
+              onChange={e => { setQuery(e.target.value); setPage(1) }}
+            />
+          ) : <div />}
+          {exportable && (
+            <button className="btn-ghost text-xs" onClick={exportCsv}>
+              <Download size={12} /> CSV
+            </button>
+          )}
+        </div>
+      )}
+      <div className="overflow-x-auto">
+        <table className="w-full text-left">
+          <thead>
+            <tr className="border-b border-surface-3">
               {columns.map(col => (
-                <td key={col.key} className={clsx('td', col.align === 'right' ? 'text-right' : '')}>
-                  {col.render ? col.render(row[col.key], row) : (row[col.key] ?? '—')}
-                </td>
+                <th
+                  key={col.key}
+                  className={clsx('th cursor-pointer select-none hover:text-gray-300 transition-colors', col.align === 'right' ? 'text-right' : '')}
+                  onClick={() => toggleSort(col.key)}
+                >
+                  <span className="inline-flex items-center gap-1">
+                    {col.label}
+                    {sort.key === col.key
+                      ? (sort.asc ? <ChevronUp size={10} /> : <ChevronDown size={10} />)
+                      : <ChevronsUpDown size={10} className="opacity-30" />}
+                  </span>
+                </th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
-      {!data.length && (
-        <div className="py-8 text-center text-sm text-gray-600">No data</div>
+          </thead>
+          <tbody>
+            {pageData.map((row, i) => (
+              <tr key={i} className="table-row">
+                {columns.map(col => (
+                  <td key={col.key} className={clsx('td', col.align === 'right' ? 'text-right' : '')}>
+                    {col.render ? col.render(row[col.key], row) : (row[col.key] ?? '—')}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!pageData.length && (
+          <div className="py-8 text-center text-sm text-gray-600">No data</div>
+        )}
+      </div>
+      {pageSize > 0 && pages > 1 && (
+        <div className="flex items-center gap-2 mt-3 text-sm text-gray-500">
+          <button className="btn-ghost px-2 py-1 text-xs disabled:opacity-30"
+            disabled={page <= 1} onClick={() => setPage(p => p - 1)}>‹ Prev</button>
+          <span className="text-xs">{page} / {pages}</span>
+          <button className="btn-ghost px-2 py-1 text-xs disabled:opacity-30"
+            disabled={page >= pages} onClick={() => setPage(p => p + 1)}>Next ›</button>
+          <span className="ml-2 text-xs text-gray-600">{sorted.length} rows</span>
+        </div>
       )}
     </div>
   )

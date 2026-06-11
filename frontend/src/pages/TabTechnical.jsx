@@ -1,10 +1,14 @@
-import { useState } from 'react'
+import { useState, lazy, Suspense } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import Plot from 'react-plotly.js'
 import { analyticsApi, securitiesApi } from '../lib/api'
 import { qk } from '../lib/queryClient'
 import { fmt, plotlyConfig } from '../lib/utils'
-import { LoadingOverlay, ErrorMsg, MetricCard, Expander, SectionHeader } from '../components/ui'
+import { LoadingOverlay, ErrorMsg, MetricCard, SectionHeader } from '../components/ui'
+
+const Plot = lazy(() => import('react-plotly.js'))
+function LazyPlot(props) {
+  return <Suspense fallback={<div className="text-gray-500 text-xs py-4">Loading chart…</div>}><Plot {...props} /></Suspense>
+}
 
 const BASE = {
   paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
@@ -17,30 +21,46 @@ const BASE = {
 }
 
 const LOOKBACKS = [
-  { value: 30, label: '1M' }, { value: 90, label: '3M' },
-  { value: 180, label: '6M' }, { value: 365, label: '1Y' },
+  { value: 90, label: '3M' }, { value: 180, label: '6M' }, { value: 365, label: '1Y' },
   { value: 730, label: '2Y' }, { value: 1825, label: '5Y' },
 ]
+const SMA_CHOICES = [5, 10, 20, 50, 100, 200]
+const EMA_CHOICES = [5, 10, 20, 50, 100, 200]
+const SMA_COLORS = { 5: '#f59e0b', 10: '#fb923c', 20: '#facc15', 50: '#84cc16', 100: '#14b8a6', 200: '#38bdf8' }
+const EMA_COLORS = { 5: '#a78bfa', 10: '#c084fc', 20: '#e879f9', 50: '#f472b6', 100: '#fb7185', 200: '#f87171' }
 
 export default function TabTechnical() {
   const [symbol, setSymbol] = useState('')
   const [lookback, setLookback] = useState(365)
-  const [showBB, setShowBB] = useState(true)
-  const [showSMA, setShowSMA] = useState(true)
-  const [showEMA, setShowEMA] = useState(false)
+  const [smaPeriods, setSmaPeriods] = useState([50, 200])
+  const [emaPeriods, setEmaPeriods] = useState([])
+  const [showBB, setShowBB] = useState(false)
+  const [showCrossovers, setShowCrossovers] = useState(true)
+  const [showExtrema, setShowExtrema] = useState(false)
   const [showVolume, setShowVolume] = useState(true)
 
   const { data: securities = [] } = useQuery({ queryKey: qk.securities(), queryFn: securitiesApi.list })
 
-  const enabled = !!symbol
+  const opts = {
+    sma_periods: smaPeriods.join(','),
+    ema_periods: emaPeriods.join(','),
+    bb_window: 20,
+    show_bb: showBB,
+    show_crossovers: showCrossovers,
+    show_extrema: showExtrema,
+    lookback_days: lookback,
+  }
+
   const { data: result, isLoading, error } = useQuery({
-    queryKey: qk.indicators(symbol, { lookback_days: lookback }),
-    queryFn: () => analyticsApi.indicators(symbol, { lookback_days: lookback }),
-    enabled,
+    queryKey: qk.indicators(symbol, opts),
+    queryFn: () => analyticsApi.indicators(symbol, opts),
+    enabled: !!symbol,
   })
 
   const series = result?.series || []
   const metrics = result?.metrics || {}
+  const crossovers = result?.crossovers || { buy: [], sell: [] }
+  const extrema = result?.extrema || { min: [], max: [] }
 
   const dates = series.map(r => r.date)
   const closes = series.map(r => r.adj_close ?? r.close)
@@ -48,107 +68,143 @@ export default function TabTechnical() {
   const highs = series.map(r => r.high)
   const lows = series.map(r => r.low)
   const volumes = series.map(r => r.volume)
-  const rsi14 = series.map(r => r.rsi_14)
-  const sma20 = series.map(r => r.sma_20)
-  const ema20 = series.map(r => r.ema_20)
-  const bbUpper = series.map(r => r.bb_upper)
-  const bbLower = series.map(r => r.bb_lower)
-  const bbMid = series.map(r => r.bb_mid)
+  const rsi = series.map(r => r.rsi)
+
+  const toggle = (arr, setArr, val) =>
+    setArr(a => a.includes(val) ? a.filter(x => x !== val) : [...a, val])
 
   return (
     <div className="space-y-4">
       <SectionHeader title="Technical Analysis" />
 
       {/* Controls */}
-      <div className="card flex flex-wrap gap-4 items-end">
-        <div className="flex-1 min-w-48">
-          <label className="label">Security</label>
-          <input className="input" list="tech-sec-list" value={symbol}
-            onChange={e => setSymbol(e.target.value.toUpperCase())} placeholder="e.g. AAPL" />
-          <datalist id="tech-sec-list">
-            {securities.map(s => <option key={s.symbol || s.yahoo_ticker} value={s.symbol || s.yahoo_ticker} />)}
-          </datalist>
+      <div className="card space-y-3">
+        <div className="flex flex-wrap gap-4 items-end">
+          <div className="flex-1 min-w-48">
+            <label className="label">Security</label>
+            <input className="input" list="tech-sec-list" value={symbol}
+              onChange={e => setSymbol(e.target.value.toUpperCase())} placeholder="e.g. AAPL" />
+            <datalist id="tech-sec-list">
+              {securities.map(s => <option key={s.symbol || s.yahoo_ticker} value={s.symbol || s.yahoo_ticker} />)}
+            </datalist>
+          </div>
+          <div className="flex gap-1">
+            {LOOKBACKS.map(lb => (
+              <button key={lb.value}
+                className={`btn text-xs px-2 py-1 ${lookback === lb.value ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => setLookback(lb.value)}>{lb.label}</button>
+            ))}
+          </div>
         </div>
-        <div className="flex gap-1">
-          {LOOKBACKS.map(lb => (
-            <button key={lb.value}
-              className={`btn text-xs px-2 py-1 ${lookback === lb.value ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setLookback(lb.value)}>
-              {lb.label}
-            </button>
-          ))}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label className="label">SMAs</label>
+            <div className="flex flex-wrap gap-1">
+              {SMA_CHOICES.map(w => (
+                <button key={w} onClick={() => toggle(smaPeriods, setSmaPeriods, w)}
+                  className={`badge text-xs cursor-pointer ${smaPeriods.includes(w) ? 'badge-blue' : 'bg-surface-3 text-gray-500'}`}>
+                  {w}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="label">EMAs</label>
+            <div className="flex flex-wrap gap-1">
+              {EMA_CHOICES.map(e => (
+                <button key={e} onClick={() => toggle(emaPeriods, setEmaPeriods, e)}
+                  className={`badge text-xs cursor-pointer ${emaPeriods.includes(e) ? 'badge-blue' : 'bg-surface-3 text-gray-500'}`}>
+                  {e}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
-        <div className="flex gap-2 text-xs">
-          {[['SMA 20', showSMA, setShowSMA], ['EMA 20', showEMA, setShowEMA],
-            ['Bollinger', showBB, setShowBB], ['Volume', showVolume, setShowVolume]].map(([label, val, set]) => (
+
+        <div className="flex flex-wrap gap-2 text-xs">
+          {[['Bollinger', showBB, setShowBB], ['Crossovers', showCrossovers, setShowCrossovers],
+            ['Local Min/Max', showExtrema, setShowExtrema], ['Volume', showVolume, setShowVolume]].map(([label, val, set]) => (
             <button key={label} onClick={() => set(v => !v)}
-              className={`badge cursor-pointer ${val ? 'badge-blue' : 'bg-surface-3 text-gray-500'}`}>
-              {label}
-            </button>
+              className={`badge cursor-pointer ${val ? 'badge-blue' : 'bg-surface-3 text-gray-500'}`}>{label}</button>
           ))}
         </div>
       </div>
 
-      {!symbol && (
-        <div className="card text-center text-gray-500 py-12">Select a security to view technical analysis.</div>
-      )}
-
+      {!symbol && <div className="card text-center text-gray-500 py-12">Select a security to view technical analysis.</div>}
       {symbol && isLoading && <LoadingOverlay label={`Loading ${symbol}…`} />}
       {symbol && error && <ErrorMsg error={error} />}
 
       {series.length > 0 && (
         <>
-          {/* Risk metrics */}
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-            {[
-              ['Sharpe', metrics.sharpe, 2],
-              ['Sortino', metrics.sortino, 2],
-              ['Calmar', metrics.calmar, 2],
-              ['Max DD', metrics.max_drawdown, 1, '%', 100],
-              ['Volatility', metrics.volatility, 1, '%', 100],
-              ['CAGR', metrics.cagr, 1, '%', 100],
-            ].map(([label, v, dec, suf = '', mul = 1]) => (
-              <MetricCard key={label} label={label}
-                value={v != null ? `${(v * mul).toFixed(dec)}${suf}` : '—'}
-                color={v != null && v < 0 ? 'text-red-400' : ''} />
-            ))}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <MetricCard label="Volatility" value={metrics.volatility != null ? fmt.pct(metrics.volatility) : '—'} color={metrics.volatility > 0.3 ? 'text-warning' : ''} />
+            <MetricCard label="Sharpe" value={metrics.sharpe != null ? metrics.sharpe.toFixed(2) : '—'} color={metrics.sharpe < 0 ? 'text-red-400' : ''} />
+            {metrics.sortino != null && <MetricCard label="Sortino" value={metrics.sortino.toFixed(2)} />}
+            <MetricCard label="Max DD" value={metrics.max_drawdown != null ? fmt.pct(metrics.max_drawdown) : '—'} color="text-red-400" />
           </div>
 
-          {/* Candlestick / price chart */}
+          {/* Price chart */}
           <div className="card p-2">
-            <Plot
+            <LazyPlot
               data={[
                 {
-                  type: 'candlestick',
-                  x: dates, open: opens, high: highs, low: lows, close: closes,
-                  name: symbol,
+                  type: 'candlestick', x: dates, open: opens, high: highs, low: lows, close: closes, name: symbol,
                   increasing: { line: { color: '#22c55e' }, fillcolor: '#22c55e' },
                   decreasing: { line: { color: '#ef4444' }, fillcolor: '#ef4444' },
                 },
-                ...(showSMA && sma20[0] != null ? [{ x: dates, y: sma20, type: 'scatter', name: 'SMA 20', line: { color: '#f59e0b', width: 1.5 } }] : []),
-                ...(showEMA && ema20[0] != null ? [{ x: dates, y: ema20, type: 'scatter', name: 'EMA 20', line: { color: '#a78bfa', width: 1.5 } }] : []),
-                ...(showBB && bbUpper[0] != null ? [
-                  { x: dates, y: bbUpper, type: 'scatter', name: 'BB Upper', line: { color: '#38bdf8', width: 1, dash: 'dot' } },
-                  { x: dates, y: bbMid, type: 'scatter', name: 'BB Mid', line: { color: '#38bdf8', width: 1 } },
-                  { x: dates, y: bbLower, type: 'scatter', name: 'BB Lower', fill: 'tonexty', fillcolor: 'rgba(56,189,248,0.05)', line: { color: '#38bdf8', width: 1, dash: 'dot' } },
+                ...smaPeriods.map(w => ({
+                  x: dates, y: series.map(r => r[`sma_${w}`]), type: 'scatter', name: `SMA ${w}`,
+                  line: { color: SMA_COLORS[w] || '#f59e0b', width: 1.3, dash: 'dash' },
+                })),
+                ...emaPeriods.map(e => ({
+                  x: dates, y: series.map(r => r[`ema_${e}`]), type: 'scatter', name: `EMA ${e}`,
+                  line: { color: EMA_COLORS[e] || '#a78bfa', width: 1.3, dash: 'dot' },
+                })),
+                ...(showBB && series[0]?.bb_upper != null ? [
+                  { x: dates, y: series.map(r => r.bb_upper), type: 'scatter', name: 'BB Upper', line: { color: '#38bdf8', width: 1, dash: 'dot' } },
+                  { x: dates, y: series.map(r => r.bb_lower), type: 'scatter', name: 'BB Lower', fill: 'tonexty', fillcolor: 'rgba(56,189,248,0.05)', line: { color: '#38bdf8', width: 1, dash: 'dot' } },
                 ] : []),
+                ...(showCrossovers && crossovers.buy.length ? [{
+                  x: crossovers.buy.map(c => c.date), y: crossovers.buy.map(c => c.price),
+                  type: 'scatter', mode: 'markers', name: 'Buy Signal',
+                  marker: { color: '#22c55e', size: 11, symbol: 'triangle-up', line: { color: '#0a0a0f', width: 1 } },
+                }] : []),
+                ...(showCrossovers && crossovers.sell.length ? [{
+                  x: crossovers.sell.map(c => c.date), y: crossovers.sell.map(c => c.price),
+                  type: 'scatter', mode: 'markers', name: 'Sell Signal',
+                  marker: { color: '#ef4444', size: 11, symbol: 'triangle-down', line: { color: '#0a0a0f', width: 1 } },
+                }] : []),
+                ...(showExtrema && extrema.max.length ? [{
+                  x: extrema.max.map(c => c.date), y: extrema.max.map(c => c.price),
+                  type: 'scatter', mode: 'markers', name: 'Local Max',
+                  marker: { color: '#facc15', size: 7, symbol: 'circle' },
+                }] : []),
+                ...(showExtrema && extrema.min.length ? [{
+                  x: extrema.min.map(c => c.date), y: extrema.min.map(c => c.price),
+                  type: 'scatter', mode: 'markers', name: 'Local Min',
+                  marker: { color: '#38bdf8', size: 7, symbol: 'circle' },
+                }] : []),
               ]}
               layout={{
-                ...BASE,
-                title: { text: symbol, font: { color: '#d1d5db', size: 14 } },
+                ...BASE, title: { text: symbol, font: { color: '#d1d5db', size: 14 } },
                 xaxis: { ...BASE.xaxis, rangeslider: { visible: false } },
                 yaxis: { ...BASE.yaxis, tickprefix: '€' },
-                legend: { bgcolor: 'transparent', font: { color: '#9ca3af', size: 10 } },
-                height: 420,
+                legend: { bgcolor: 'transparent', font: { color: '#9ca3af', size: 10 }, orientation: 'h', y: -0.15 },
+                height: 460,
               }}
               config={plotlyConfig} style={{ width: '100%' }} useResizeHandler
             />
+            {showCrossovers && (crossovers.buy.length > 0 || crossovers.sell.length > 0) && (
+              <p className="text-xs text-gray-600 mt-1 px-2">
+                ▲ {crossovers.buy.length} buy signals, ▼ {crossovers.sell.length} sell signals (first SMA × first EMA, or first two SMAs).
+              </p>
+            )}
           </div>
 
-          {/* Volume */}
           {showVolume && (
             <div className="card p-2">
-              <Plot
+              <LazyPlot
                 data={[{
                   type: 'bar', x: dates, y: volumes, name: 'Volume',
                   marker: { color: closes.map((c, i) => i > 0 && c >= closes[i - 1] ? 'rgba(34,197,94,0.5)' : 'rgba(239,68,68,0.5)') },
@@ -159,14 +215,12 @@ export default function TabTechnical() {
             </div>
           )}
 
-          {/* RSI */}
-          {rsi14[0] != null && (
+          {rsi[0] != null && (
             <div className="card p-2">
-              <Plot
-                data={[{ type: 'scatter', x: dates, y: rsi14, name: 'RSI 14', line: { color: '#a78bfa', width: 1.5 } }]}
+              <LazyPlot
+                data={[{ type: 'scatter', x: dates, y: rsi, name: 'RSI', line: { color: '#a78bfa', width: 1.5 } }]}
                 layout={{
-                  ...BASE,
-                  title: { text: 'RSI (14)', font: { color: '#d1d5db', size: 13 } },
+                  ...BASE, title: { text: 'RSI (14)', font: { color: '#d1d5db', size: 13 } },
                   yaxis: { ...BASE.yaxis, range: [0, 100] },
                   shapes: [
                     { type: 'line', x0: dates[0], x1: dates[dates.length - 1], y0: 70, y1: 70, line: { color: '#ef4444', dash: 'dot', width: 1 } },

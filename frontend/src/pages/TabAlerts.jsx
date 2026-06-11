@@ -5,7 +5,7 @@ import toast from 'react-hot-toast'
 import { alertsApi, securitiesApi } from '../lib/api'
 import { qk } from '../lib/queryClient'
 import { fmt } from '../lib/utils'
-import { LoadingOverlay, ErrorMsg, SectionHeader, Modal, ConfirmModal, Pagination, Input, Select } from '../components/ui'
+import { LoadingOverlay, ErrorMsg, SectionHeader, Modal, ConfirmModal, Pagination, Input, Select, Expander } from '../components/ui'
 
 const PAGE_SIZE = 15
 
@@ -127,6 +127,19 @@ export default function TabAlerts() {
           {uniqueTypes.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
       </div>
+
+      <Expander title="ℹ️ Alert Type Descriptions">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1 text-xs text-gray-400">
+          <div><span className="text-gray-200 font-medium">price</span> — triggers when price crosses a threshold (params: threshold, direction)</div>
+          <div><span className="text-gray-200 font-medium">rsi</span> — triggers on RSI overbought/oversold crossing (params: threshold, direction OR overbought, underbought)</div>
+          <div><span className="text-gray-200 font-medium">ma_crossover</span> — golden/death cross of two moving averages (params: short, long, crossover_type)</div>
+          <div><span className="text-gray-200 font-medium">52w</span> — new 52-week high or low (params: type)</div>
+          <div><span className="text-gray-200 font-medium">volume_spike</span> — abnormal volume vs average (params: multiplier)</div>
+          <div><span className="text-gray-200 font-medium">pct_change</span> — percent move over N days (params: pct, direction, days)</div>
+          <div><span className="text-gray-200 font-medium">earnings_soon</span> — upcoming earnings within N days (params: days)</div>
+          <div><span className="text-gray-200 font-medium">mos</span> — margin-of-safety vs intrinsic value (params: threshold)</div>
+        </div>
+      </Expander>
 
       {isLoading ? <LoadingOverlay /> : error ? <ErrorMsg error={error} /> : (
         <div className="card overflow-hidden p-0">
