@@ -51,11 +51,14 @@ services:
       PYTHONPATH: /app
     volumes:
       - ./app:/app
-      - ./api/main.py:/srv/api_main.py
+      # Directory mount, not a single-file mount on api/main.py — a
+      # single-file bind mount tracks one host inode and goes stale the
+      # first time an editor rewrites (rather than edits in place) the file.
+      - ./api:/api
       - ./scripts:/app/scripts
     ports:
       - "8505:8503"   # matches frontend/vite.config.js proxy target — no frontend config changes needed
-    command: uvicorn api_main:app --host 0.0.0.0 --port 8503 --reload --reload-dir /srv --reload-dir /app
+    command: sh -c "cd /api && uvicorn main:app --host 0.0.0.0 --port 8503 --reload --reload-dir /api --reload-dir /app"
 
   # ─────────────────────────────────────────
   # Streamlit — optional, for side-by-side parity checks during the React migration

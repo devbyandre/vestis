@@ -285,10 +285,12 @@ def add_transaction(body: TransactionCreate):
 
 @app.put("/transactions/{tx_id}")
 def edit_transaction(tx_id: int, body: TransactionEdit):
+    # mw.edit_transaction only updates the transaction's own fields — it has
+    # no support for reassigning a transaction's portfolio or security, so
+    # body.portfolio_id/body.symbol (echoed back from the existing row by
+    # the frontend) aren't passed through.
     mw.edit_transaction(
         tx_id=tx_id,
-        portfolio_id=body.portfolio_id,
-        symbol=body.symbol,
         tx_date=body.tx_date,
         tx_type=body.tx_type,
         quantity=body.quantity,
@@ -733,7 +735,8 @@ def get_kpis(portfolio_ids: Optional[str] = Query(None)):
 
 @app.get("/planning/taxonomy")
 def get_taxonomy():
-    t = mw.get_complete_taxonomy()
+    holdings = mw.get_latest_holdings_snapshot()
+    t = mw.get_complete_taxonomy(holdings)
     return t if isinstance(t, dict) else {}
 
 @app.get("/planning/portfolio-symbols")

@@ -289,7 +289,7 @@ def delete_security_from_watchlist(symbol: str)-> None:
     db.delete_watchlist_item(symbol)
 
 
-def add_security(symbol: str) -> int:
+def add_security(symbol: str, name: str | None = None, isin: str | None = None) -> int:
     """
     Add a security to the database if it does not exist.
     Returns the security_id.
@@ -298,6 +298,9 @@ def add_security(symbol: str) -> int:
     security_id = db.get_security_id(symbol)
     if security_id is None:
         security_id = db.insert_security(symbol)
+
+        if name is not None or isin is not None:
+            db.update_security(security_id, name=name, isin=isin)
 
         # Fetch data in background
         thread = threading.Thread(target=fetch_and_store_lazy, args=(symbol,), daemon=True)
