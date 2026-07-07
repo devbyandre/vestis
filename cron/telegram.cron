@@ -1,8 +1,12 @@
+# Vestis Telegram Worker Schedule
 # telegram_worker crontab  (supercronic format)
+# Timezone: UTC
 #
 # Immediate alerts every 5 min during market hours Mon-Fri
-# Daily digest at 21:30 UTC
 #
 # min   hour    day  month  weekday   command
-*/5     8-22    *    *      1-5       PYTHONPATH=/app python /app/telegram_worker.py
-  30    21      *    *      1-5       PYTHONPATH=/app python /app/telegram_worker.py --digest daily
+*/5     8-22    *    *      1-5       PYTHONPATH=/app python /app/telegram_worker.py 2>&1 | tee -a /var/log/telegram_worker.log
+
+# Daily digest at 17:00 UTC
+# min   hour    day  month  weekday   command
+  0    17      *    *      1-5       PYTHONPATH=/app python /app/telegram_worker.py --digest daily 2>&1 | tee -a /var/log/telegram_worker.log
