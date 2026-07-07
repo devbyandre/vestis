@@ -458,6 +458,21 @@ def maintain_alerts():
         logging.exception("Could not load holdings for maintain_alerts")
         return
 
+    # Deactivate automatic alerts for securities no longer held — otherwise
+    # a price/trailing-stop alert created while a position was open keeps
+    # firing forever after it's fully sold, since nothing else clears it.
+    try:
+        held_ids = set(int(x) for x in holdings['security_id']) if not holdings.empty else set()
+        stale = mw.get_automatic_alerts()
+        if not stale.empty:
+            stale = stale[~stale['security_id'].astype(int).isin(held_ids)]
+            for _, alert in stale.iterrows():
+                mw.toggle_alert(int(alert['id']), False)
+                logging.info("Deactivated stale automatic alert %s for security_id=%s (no longer held)",
+                             alert['id'], alert['security_id'])
+    except Exception:
+        logging.exception("Could not clean up stale automatic alerts")
+
     for _, row in holdings.iterrows():
         symbol      = row['symbol']
         security_id = row['security_id']

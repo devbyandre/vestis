@@ -313,3 +313,68 @@ class TestHoldingsTimeseries:
         db.insert_holdings_timeseries(records)
         df = db.get_holdings_timeseries()
         assert df.empty  # zero quantity rows are excluded
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 9. Watchlist / holdings interdependency
+#
+# Regression tests for a reported bug: sold-out positions were silently
+# reappearing on the Watchlist tab (get_watchlist() excluded "currently
+# held" instead of "ever transacted"), and telegram_worker kept firing
+# automatic alerts for them forever (maintain_alerts() iterated ALL
+# ever-transacted securities instead of current holdings, and nothing
+# ever deactivated a stale automatic alert).
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestWatchlist:
+    def test_excludes_currently_held_security(self, db, db_path):
+        sec_id = seed_security(db_path, "AAPL")
+        db.insert_transaction(1, sec_id, "2023-01-01", "buy", 10, 100.0, 0.0)
+        assert "AAPL" not in db.get_watchlist()["symbol"].tolist()
+
+    def test_excludes_fully_sold_security(self, db, db_path):
+        sec_id = seed_security(db_path, "TSLA")
+        db.insert_transaction(1, sec_id, "2023-01-01", "buy", 10, 100.0, 0.0)
+        db.insert_transaction(1, sec_id, "2023-06-01", "sell", 10, 150.0, 0.0)
+        assert "TSLA" not in db.get_watchlist()["symbol"].tolist()
+
+    def test_includes_never_transacted_security(self, db, db_path):
+        seed_security(db_path, "NVDA")
+        assert "NVDA" in db.get_watchlist()["symbol"].tolist()
+
+
+class TestAlertHoldingsInterdependency:
+    def _seed_price(self, db_path, sec_id, date, price):
+        seed(db_path,
+             "INSERT INTO prices (security_id, date, open, high, low, close, adj_close, volume) "
+             "VALUES (?, ?, ?, ?, ?, ?, ?, 1000)",
+             (sec_id, date, price, price, price, price, price))
+
+    def test_maintain_alerts_deactivates_alerts_for_sold_positions(
+        self, mw, telegram_worker, db_path, monkeypatch
+    ):
+        held_sec_id = seed_security(db_path, "MSFT")
+        self._seed_price(db_path, held_sec_id, "2023-01-01", 300.0)
+        mw.add_transaction(1, "MSFT", "2023-01-01", "buy", 10, 300.0, 0.0)
+
+        sold_sec_id = seed_security(db_path, "TSLA")
+        self._seed_price(db_path, sold_sec_id, "2023-01-01", 200.0)
+        mw.add_transaction(1, "TSLA", "2023-01-01", "buy", 5, 200.0, 0.0)
+        mw.add_transaction(1, "TSLA", "2023-06-01", "sell", 5, 250.0, 0.0)
+
+        held_alert_id = mw.create_alert(
+            held_sec_id, "price", {"threshold": 250, "direction": "below"}, automatic=True
+        )
+        sold_alert_id = mw.create_alert(
+            sold_sec_id, "price", {"threshold": 180, "direction": "below"}, automatic=True
+        )
+
+        # Only exercising the stale-alert cleanup step here — avoid real
+        # network calls in the per-holding alert-refresh loop that follows.
+        monkeypatch.setattr(mw, "fetch_symbol_data", lambda symbol: {})
+
+        telegram_worker.maintain_alerts()
+
+        alerts = mw.get_all_alerts_for_ui().set_index("id")
+        assert int(alerts.loc[held_alert_id, "active"]) == 1
+        assert int(alerts.loc[sold_alert_id, "active"]) == 0

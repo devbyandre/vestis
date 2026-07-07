@@ -748,15 +748,7 @@ def get_watchlist() -> pd.DataFrame:
                sc.freeCashflow AS "freeCashflow", sc.sharesOutstanding AS "sharesOutstanding"
         FROM securities s
         LEFT JOIN securities_cache sc ON sc.security_id = s.id
-        WHERE s.id NOT IN (
-            SELECT t.security_id FROM transactions t
-            GROUP BY t.security_id
-            HAVING SUM(
-                CASE WHEN LOWER(t.type)='buy'  THEN t.quantity
-                     WHEN LOWER(t.type)='sell' THEN -t.quantity
-                     ELSE 0 END
-            ) > 0
-        )
+        WHERE s.id NOT IN (SELECT DISTINCT t.security_id FROM transactions t)
         ORDER BY s.yahoo_ticker
     """)
 

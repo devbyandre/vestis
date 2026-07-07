@@ -260,6 +260,31 @@ def api_client(db_path, monkeypatch):
     return TestClient(api_main.app)
 
 
+@pytest.fixture
+def mw(db_path, monkeypatch):
+    """
+    The middleware module, reloaded fresh and bound to the temp SQLite DB —
+    for tests that need mw.* functions directly (e.g. telegram_worker logic
+    that isn't reachable through the API or db_utils alone).
+    """
+    _patch_config_and_env(db_path, monkeypatch)
+
+    for mod in ("middleware", "data_fetcher", "db_utils"):
+        sys.modules.pop(mod, None)
+
+    import middleware as _mw
+    return _mw
+
+
+@pytest.fixture
+def telegram_worker(mw, monkeypatch):
+    """telegram_worker reloaded fresh, bound to the same DB as the `mw` fixture."""
+    sys.modules.pop("telegram_worker", None)
+    sys.modules.pop("telegram_client", None)
+    import telegram_worker as _tw
+    return _tw
+
+
 def seed(db_path, sql, params=()):
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row

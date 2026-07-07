@@ -900,7 +900,14 @@ def get_watchlist_symbols() -> list:
 
 
 def get_holdings():
-    return db.get_holdings_from_transactions(None)
+    """
+    Currently-held positions only (net quantity > 0), aggregated across
+    portfolios — used by telegram_worker.maintain_alerts() to decide which
+    securities get automatic alerts. db.get_holdings_from_transactions()
+    returns every security ever transacted regardless of current position,
+    which is wrong for this purpose (see get_latest_holdings_snapshot()).
+    """
+    return get_latest_holdings_snapshot(aggregate=True)
 
 
 def get_portfolio_symbols(portfolio_name: str) -> list:
