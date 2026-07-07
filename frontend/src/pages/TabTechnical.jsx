@@ -1,9 +1,9 @@
 import { useState, lazy, Suspense } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueries } from '@tanstack/react-query'
 import { analyticsApi, securitiesApi } from '../lib/api'
 import { qk } from '../lib/queryClient'
 import { fmt, plotlyConfig, distributionStats, normalPdf, linspace } from '../lib/utils'
-import { LoadingOverlay, ErrorMsg, MetricCard, SectionHeader, Expander } from '../components/ui'
+import { LoadingOverlay, ErrorMsg, MetricCard, SectionHeader, Expander, SortableTable } from '../components/ui'
 
 const Plot = lazy(() => import('react-plotly.js'))
 function LazyPlot(props) {
@@ -140,7 +140,164 @@ function FundamentalsGrid({ basic, metrics }) {
   )
 }
 
-export default function TabTechnical() {
+const COMPARE_COLORS = ['#38bdf8', '#f59e0b', '#22c55e', '#a78bfa', '#ef4444', '#f472b6']
+
+// ── Compare mode ──────────────────────────────────────────────────────────────
+// Overlaid indexed price + RSI (comparable across symbols regardless of raw
+// price level), small-multiples volume + return distribution, and one
+// comparison table per fundamentals group — mirrors app_streamlit.py's
+// multi-security branch (which falls back to per-group st.dataframe tables
+// instead of the single-symbol metric view).
+function TechnicalCompare({ securities }) {
+  const [symbols, setSymbols] = useState([])
+  const [pick, setPick] = useState('')
+  const [lookback, setLookback] = useState(365)
+
+  const addSymbol = (s) => {
+    const sym = s.trim().toUpperCase()
+    if (sym && !symbols.includes(sym) && symbols.length < 6) setSymbols(arr => [...arr, sym])
+    setPick('')
+  }
+  const removeSymbol = (s) => setSymbols(arr => arr.filter(x => x !== s))
+
+  const indicatorQueries = useQueries({
+    queries: symbols.map(sym => ({
+      queryKey: qk.indicators(sym, { lookback_days: lookback, compare: true }),
+      queryFn: () => analyticsApi.indicators(sym, { lookback_days: lookback, show_bb: false, show_crossovers: false }),
+    })),
+  })
+  const basicQueries = useQueries({
+    queries: symbols.map(sym => ({
+      queryKey: qk.security(sym),
+      queryFn: () => securitiesApi.getBasic(sym),
+    })),
+  })
+
+  const perSymbol = symbols.map((sym, i) => {
+    const series = indicatorQueries[i]?.data?.series || []
+    const closes = series.map(r => r.adj_close ?? r.close)
+    const dates = series.map(r => r.date)
+    const rsi = series.map(r => r.rsi)
+    const volumes = series.map(r => r.volume)
+    const metrics = indicatorQueries[i]?.data?.metrics || {}
+    const basic = basicQueries[i]?.data || {}
+    const base = closes.find(c => c != null) || 1
+    const indexed = closes.map(c => c != null ? (c / base) * 100 : null)
+    return { sym, series, closes, dates, rsi, volumes, metrics, basic, indexed, isLoading: indicatorQueries[i]?.isLoading }
+  })
+
+  const anyLoading = perSymbol.some(p => p.isLoading)
+  const ready = perSymbol.filter(p => p.dates.length > 0)
+
+  const compareCols = (fields) => [
+    { key: 'sym', label: 'Security' },
+    ...fields.map(([label, fn]) => ({
+      key: label, label, align: 'right', render: (_, r) => fn({ basic: r.basic, metrics: r.metrics }),
+    })),
+  ]
+
+  return (
+    <div className="space-y-4">
+      <div className="card space-y-2">
+        <label className="label">Securities (2-6)</label>
+        <div className="flex flex-wrap gap-2 items-center">
+          {symbols.map(s => (
+            <span key={s} className="badge badge-blue cursor-pointer" onClick={() => removeSymbol(s)}>{s} ×</span>
+          ))}
+          {symbols.length < 6 && (
+            <input className="input max-w-40 text-sm" list="tech-compare-list" value={pick} placeholder="Add symbol…"
+              onChange={e => setPick(e.target.value.toUpperCase())}
+              onKeyDown={e => e.key === 'Enter' && addSymbol(pick)}
+              onBlur={() => pick && addSymbol(pick)} />
+          )}
+          <datalist id="tech-compare-list">
+            {securities.map(s => <option key={s.symbol || s.yahoo_ticker} value={s.symbol || s.yahoo_ticker} />)}
+          </datalist>
+        </div>
+        <div className="flex gap-1">
+          {LOOKBACKS.map(lb => (
+            <button key={lb.value} className={`btn text-xs px-2 py-1 ${lookback === lb.value ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => setLookback(lb.value)}>{lb.label}</button>
+          ))}
+        </div>
+      </div>
+
+      {symbols.length < 2 && <div className="card text-center text-gray-500 py-8">Add at least 2 securities to compare.</div>}
+      {symbols.length >= 2 && anyLoading && <LoadingOverlay label="Loading comparison…" />}
+
+      {symbols.length >= 2 && ready.length >= 2 && (
+        <>
+          <div className="card p-2">
+            <LazyPlot
+              data={ready.map((p, i) => ({
+                x: p.dates, y: p.indexed, type: 'scatter', name: p.sym,
+                line: { color: COMPARE_COLORS[i % COMPARE_COLORS.length], width: 1.5 },
+              }))}
+              layout={{ ...BASE, title: { text: 'Indexed Price (Base = 100)', font: { color: '#d1d5db', size: 13 } }, height: 340 }}
+              config={plotlyConfig} style={{ width: '100%' }} useResizeHandler
+            />
+            <p className="text-xs text-gray-600 mt-1 px-2">Indexed to 100 at the start of the period so securities at very different price levels are comparable.</p>
+          </div>
+
+          <div className="card p-2">
+            <LazyPlot
+              data={ready.map((p, i) => ({
+                x: p.dates, y: p.rsi, type: 'scatter', name: p.sym,
+                line: { color: COMPARE_COLORS[i % COMPARE_COLORS.length], width: 1.5 },
+              }))}
+              layout={{
+                ...BASE, title: { text: 'RSI (14)', font: { color: '#d1d5db', size: 13 } },
+                yaxis: { ...BASE.yaxis, range: [0, 100] }, height: 220,
+                shapes: [
+                  { type: 'line', x0: ready[0].dates[0], x1: ready[0].dates[ready[0].dates.length - 1], y0: 70, y1: 70, line: { color: '#ef4444', dash: 'dot', width: 1 } },
+                  { type: 'line', x0: ready[0].dates[0], x1: ready[0].dates[ready[0].dates.length - 1], y0: 30, y1: 30, line: { color: '#22c55e', dash: 'dot', width: 1 } },
+                ],
+              }}
+              config={plotlyConfig} style={{ width: '100%' }} useResizeHandler
+            />
+          </div>
+
+          <Expander title="Volume (per security)">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {ready.map((p, i) => (
+                <div key={p.sym} className="card p-2">
+                  <LazyPlot
+                    data={[{ x: p.dates, y: p.volumes, type: 'bar', name: p.sym, marker: { color: COMPARE_COLORS[i % COMPARE_COLORS.length] } }]}
+                    layout={{ ...BASE, title: { text: p.sym, font: { color: '#d1d5db', size: 12 } }, height: 180 }}
+                    config={plotlyConfig} style={{ width: '100%' }} useResizeHandler
+                  />
+                </div>
+              ))}
+            </div>
+          </Expander>
+
+          <Expander title="Return Distribution (per security)">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {ready.map(p => (
+                <div key={p.sym} className="card p-2">
+                  <ReturnDistribution symbol={p.sym} closes={p.closes} />
+                </div>
+              ))}
+            </div>
+          </Expander>
+
+          <Expander title="Fundamentals Comparison" defaultOpen>
+            <div className="space-y-4">
+              {FUNDAMENTALS_GROUPS.map(g => (
+                <div key={g.title} className="overflow-x-auto">
+                  <p className="text-xs font-semibold text-gray-400 mb-2">{g.title}</p>
+                  <SortableTable columns={compareCols(g.fields)} data={ready} />
+                </div>
+              ))}
+            </div>
+          </Expander>
+        </>
+      )}
+    </div>
+  )
+}
+
+function TechnicalDeepDive({ securities }) {
   const [symbol, setSymbol] = useState('')
   const [lookback, setLookback] = useState(365)
   const [smaPeriods, setSmaPeriods] = useState([50, 200])
@@ -149,8 +306,6 @@ export default function TabTechnical() {
   const [showCrossovers, setShowCrossovers] = useState(true)
   const [showExtrema, setShowExtrema] = useState(false)
   const [showVolume, setShowVolume] = useState(true)
-
-  const { data: securities = [] } = useQuery({ queryKey: qk.securities(), queryFn: securitiesApi.list })
 
   const opts = {
     sma_periods: smaPeriods.join(','),
@@ -191,8 +346,6 @@ export default function TabTechnical() {
 
   return (
     <div className="space-y-4">
-      <SectionHeader title="Technical Analysis" />
-
       {/* Controls */}
       <div className="card space-y-3">
         <div className="flex flex-wrap gap-4 items-end">
@@ -358,6 +511,27 @@ export default function TabTechnical() {
           </Expander>
         </>
       )}
+    </div>
+  )
+}
+
+export default function TabTechnical() {
+  const [mode, setMode] = useState('deep-dive')
+  const { data: securities = [] } = useQuery({ queryKey: qk.securities(), queryFn: securitiesApi.list })
+
+  return (
+    <div className="space-y-4">
+      <SectionHeader title="Technical Analysis" action={
+        <div className="flex gap-1">
+          <button className={`btn text-xs px-3 py-1.5 ${mode === 'deep-dive' ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setMode('deep-dive')}>Deep Dive</button>
+          <button className={`btn text-xs px-3 py-1.5 ${mode === 'compare' ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setMode('compare')}>Compare</button>
+        </div>
+      } />
+      {mode === 'deep-dive'
+        ? <TechnicalDeepDive securities={securities} />
+        : <TechnicalCompare securities={securities} />}
     </div>
   )
 }
