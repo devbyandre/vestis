@@ -434,6 +434,16 @@ def get_rebalancing(portfolio_ids: Optional[str] = Query(None), retirement_year:
     result = mw.suggest_rebalancing(portfolio_ids=ids, retirement_year=retirement_year)
     if isinstance(result, pd.DataFrame):
         return _df(result)
+    if isinstance(result, dict) and isinstance(result.get("industry_weights"), dict):
+        # industry_weights is keyed by (sector, industry) tuples — FastAPI's
+        # jsonable_encoder turns each tuple key into a list to encode it,
+        # then crashes trying to use that (unhashable) list as a dict key.
+        result = {
+            **result,
+            "industry_weights": {
+                f"{sec} → {ind}": v for (sec, ind), v in result["industry_weights"].items()
+            },
+        }
     return result
 
 

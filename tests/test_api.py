@@ -262,6 +262,31 @@ class TestAnalyticsAPI:
         r = api_client.get("/analytics/indicators/DOES_NOT_EXIST")
         assert r.status_code == 404
 
+    def test_rebalancing_with_holdings_returns_200(self, api_client, db_path):
+        # Regression test: industry_weights is keyed by (sector, industry)
+        # tuples internally, which crashed FastAPI's JSON encoder
+        # (jsonable_encoder turns the tuple into a list, then can't use
+        # that list as an output dict key) — only reproduces with a real
+        # sector+industry present, which is why the empty-holdings test
+        # above never caught it.
+        sec_id = seed_security(db_path, "AAPL")
+        seed(db_path,
+             "INSERT INTO securities_cache (security_id, sector, industry, security_type) "
+             "VALUES (?, 'Technology', 'Consumer Electronics', 'EQUITY')", (sec_id,))
+        seed(db_path,
+             "INSERT INTO prices (security_id, date, open, high, low, close, adj_close, volume) "
+             "VALUES (?, '2023-06-01', 150, 150, 150, 150, 150, 1000)", (sec_id,))
+        api_client.post("/transactions", json={
+            "portfolio_id": 1, "symbol": "AAPL", "tx_date": "2023-06-01",
+            "tx_type": "buy", "quantity": 10, "price": 150.0, "fees": 0.0,
+        })
+        r = api_client.get("/analytics/rebalancing")
+        assert r.status_code == 200
+        body = r.json()
+        assert isinstance(body.get("industry_weights"), dict)
+        for key in body["industry_weights"]:
+            assert isinstance(key, str)
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Planning

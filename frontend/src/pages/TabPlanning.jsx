@@ -139,13 +139,18 @@ export default function TabPlanning() {
   ]
   const REBAL_COLS = [
     { key: 'symbol', label: 'Security', render: (v, r) => v || r.security_label },
-    { key: 'action', label: 'Action', render: v => {
-      const cls = v === 'buy' || v === 'increase' ? 'badge-green' : v === 'sell' || v === 'reduce' ? 'badge-red' : 'badge'
-      return <span className={`badge ${cls}`}>{String(v).toUpperCase()}</span>
+    { key: '_action', label: 'Action', render: (_, r) => {
+      const v = r.pct_change
+      const cls = v > 0 ? 'badge-green' : v < 0 ? 'badge-red' : 'badge'
+      const label = v > 0 ? 'Increase' : v < 0 ? 'Reduce' : 'Hold'
+      return <span className={`badge ${cls}`}>{label}</span>
     } },
-    { key: 'current_weight', label: 'Current', align: 'right', render: v => v != null ? fmt.pct(v) : '—' },
-    { key: 'target_weight', label: 'Target', align: 'right', render: v => v != null ? fmt.pct(v) : '—' },
-    { key: 'reason', label: 'Reason' },
+    { key: 'pct_change', label: '% Change', align: 'right', render: v => <span className={pnlColor(v)}>{fmt.pct(v)}</span> },
+    { key: 'market_value_change', label: '€ Change', align: 'right', render: v => v != null ? fmt.currency(v) : '—' },
+    { key: 'reasons', label: 'Reason', render: v => Array.isArray(v) ? v.join('; ') : (v || '—') },
+    { key: 'impact_allocation', label: 'Impact Allocation', align: 'right', render: v => v != null ? fmt.pct(v) : '—' },
+    { key: 'impact_risk', label: 'Impact Risk', align: 'right', render: v => v != null ? fmt.pct(v) : '—' },
+    { key: 'priority_score', label: 'Priority', align: 'right', render: v => v != null ? Number(v).toFixed(2) : '—' },
   ]
 
   return (
