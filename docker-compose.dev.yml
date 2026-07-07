@@ -1,0 +1,80 @@
+services:
+
+  # ─────────────────────────────────────────
+  # PostgreSQL — local only, own volume, offset port
+  # ─────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-vestis_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-vestis_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev_only_password}
+    volumes:
+      - vestis_dev_pgdata:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"   # offset from the default 5432 to avoid clashing with a local Postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vestis_dev}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────
+  # DB init (runs once, then exits)
+  # ─────────────────────────────────────────
+  db-init:
+    build: .
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-vestis_dev}:${POSTGRES_PASSWORD:-dev_only_password}@db:5432/${POSTGRES_DB:-vestis_dev}
+    command: sh -c "cd /app && PYTHONPATH=/app python setup/db_init.py"
+
+  # ─────────────────────────────────────────
+  # FastAPI — hot reload, mounted source
+  # ─────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-vestis_dev}:${POSTGRES_PASSWORD:-dev_only_password}@db:5432/${POSTGRES_DB:-vestis_dev}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      PYTHONPATH: /app
+    volumes:
+      - ./app:/app
+      - ./api/main.py:/srv/api_main.py
+      - ./scripts:/app/scripts
+    ports:
+      - "8505:8503"   # matches frontend/vite.config.js proxy target — no frontend config changes needed
+    command: uvicorn api_main:app --host 0.0.0.0 --port 8503 --reload --reload-dir /srv --reload-dir /app
+
+  # ─────────────────────────────────────────
+  # Streamlit — optional, for side-by-side parity checks during the React migration
+  # ─────────────────────────────────────────
+  streamlit:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-vestis_dev}:${POSTGRES_PASSWORD:-dev_only_password}@db:5432/${POSTGRES_DB:-vestis_dev}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - ./app:/app
+    ports:
+      - "8501:8501"
+    command: streamlit run app_streamlit.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true --server.runOnSave=true
+
+volumes:
+  vestis_dev_pgdata:
