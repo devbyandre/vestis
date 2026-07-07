@@ -7,6 +7,118 @@ import { qk } from '../lib/queryClient'
 import { fmt, plotlyConfig } from '../lib/utils'
 import { LoadingOverlay, ErrorMsg, Modal, ConfirmModal, SortableTable, SectionHeader, Input, Select, Expander, MetricCard } from '../components/ui'
 
+function PortfolioManager({ portfolios }) {
+  const qc = useQueryClient()
+  const [showAdd, setShowAdd] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [renamePf, setRenamePf] = useState(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [deletePf, setDeletePf] = useState(null)
+  const [reassignTo, setReassignTo] = useState('')
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: qk.portfolios() })
+
+  const createMut = useMutation({
+    mutationFn: (name) => portfolioApi.create(name),
+    onSuccess: () => { invalidate(); setShowAdd(false); setNewName(''); toast.success('Portfolio created') },
+    onError: (e) => toast.error(e.message),
+  })
+  const renameMut = useMutation({
+    mutationFn: ({ old_name, new_name }) => portfolioApi.rename(old_name, new_name),
+    onSuccess: () => { invalidate(); setRenamePf(null); toast.success('Portfolio renamed') },
+    onError: (e) => toast.error(e.message),
+  })
+  const deleteMut = useMutation({
+    mutationFn: ({ name, reassign_to }) => portfolioApi.delete(name, reassign_to),
+    onSuccess: () => {
+      invalidate()
+      qc.invalidateQueries({ queryKey: ['transactions'] })
+      qc.invalidateQueries({ queryKey: ['holdings'] })
+      setDeletePf(null)
+      toast.success('Portfolio deleted')
+    },
+    onError: (e) => toast.error(e.message),
+  })
+
+  const openDelete = (p) => {
+    setDeletePf(p)
+    setReassignTo(portfolios.find(x => x.id !== p.id)?.name || '')
+  }
+
+  return (
+    <>
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-xs text-gray-500">Create, rename, or delete portfolios. Deleting reassigns its transactions to another portfolio.</p>
+        <button className="btn-ghost text-xs shrink-0" onClick={() => setShowAdd(true)}><Plus size={12} /> New Portfolio</button>
+      </div>
+      <div className="space-y-1.5">
+        {portfolios.map(p => (
+          <div key={p.id} className="flex items-center justify-between px-3 py-2 rounded-lg bg-surface-2 text-sm">
+            <span className="text-gray-200">{p.name}</span>
+            <div className="flex gap-2">
+              <button className="text-gray-500 hover:text-accent transition-colors"
+                onClick={() => { setRenamePf(p); setRenameValue(p.name) }}>
+                <Pencil size={12} />
+              </button>
+              <button
+                className={deleteBtnClass(portfolios.length <= 1)}
+                disabled={portfolios.length <= 1}
+                title={portfolios.length <= 1 ? 'Cannot delete the only portfolio' : 'Delete'}
+                onClick={() => openDelete(p)}
+              >
+                <Trash2 size={12} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="New Portfolio">
+        <form onSubmit={(e) => { e.preventDefault(); createMut.mutate(newName) }} className="space-y-3">
+          <Input label="Name" value={newName} onChange={setNewName} placeholder="e.g. Satellite" />
+          <div className="flex gap-2 justify-end pt-2">
+            <button type="button" className="btn-ghost" onClick={() => setShowAdd(false)}>Cancel</button>
+            <button type="submit" className="btn-primary" disabled={!newName.trim()}>Create</button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal open={!!renamePf} onClose={() => setRenamePf(null)} title={`Rename "${renamePf?.name}"`}>
+        <form onSubmit={(e) => { e.preventDefault(); renameMut.mutate({ old_name: renamePf.name, new_name: renameValue }) }} className="space-y-3">
+          <Input label="New name" value={renameValue} onChange={setRenameValue} />
+          <div className="flex gap-2 justify-end pt-2">
+            <button type="button" className="btn-ghost" onClick={() => setRenamePf(null)}>Cancel</button>
+            <button type="submit" className="btn-primary" disabled={!renameValue.trim()}>Save</button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal open={!!deletePf} onClose={() => setDeletePf(null)} title={`Delete "${deletePf?.name}"`}>
+        <div className="space-y-3">
+          <p className="text-sm text-gray-400">
+            Its transactions will be reassigned to the portfolio below. This cannot be undone.
+          </p>
+          <Select label="Reassign transactions to" value={reassignTo} onChange={setReassignTo}
+            options={portfolios.filter(p => p.id !== deletePf?.id).map(p => ({ value: p.name, label: p.name }))} />
+          <div className="flex gap-2 justify-end pt-2">
+            <button className="btn-ghost" onClick={() => setDeletePf(null)}>Cancel</button>
+            <button className="btn-danger" disabled={!reassignTo}
+              onClick={() => deleteMut.mutate({ name: deletePf.name, reassign_to: reassignTo })}>
+              Delete
+            </button>
+          </div>
+        </div>
+      </Modal>
+    </>
+  )
+}
+
+function deleteBtnClass(disabled) {
+  return disabled
+    ? 'text-gray-700 cursor-not-allowed'
+    : 'text-gray-500 hover:text-danger transition-colors'
+}
+
 const Plot = lazy(() => import('react-plotly.js'))
 const BASE = {
   paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
@@ -184,6 +296,11 @@ export default function TabTransactions() {
           {portfolios.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
       </div>
+
+      {/* Portfolio management */}
+      <Expander title="Manage Portfolios">
+        <PortfolioManager portfolios={portfolios} />
+      </Expander>
 
       {/* Trends */}
       {trends && (
