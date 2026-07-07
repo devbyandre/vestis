@@ -185,6 +185,8 @@ function TxForm({ initial, portfolios, securities, onSubmit, onClose }) {
 export default function TabTransactions() {
   const qc = useQueryClient()
   const [portfolioFilter, setPortfolioFilter] = useState('')
+  const [securityFilter, setSecurityFilter] = useState([])
+  const [typeFilter, setTypeFilter] = useState([])
   const [editTx, setEditTx] = useState(null)
   const [deleteTx, setDeleteTx] = useState(null)
   const [showAdd, setShowAdd] = useState(false)
@@ -224,10 +226,26 @@ export default function TabTransactions() {
     onError: (e) => toast.error(e.message),
   })
 
+  const securityOptions = useMemo(() =>
+    [...new Set(transactions.map(t => t.security_label || t.symbol).filter(Boolean))].sort(),
+    [transactions])
+  const typeOptions = useMemo(() =>
+    [...new Set(transactions.map(t => t.tx_type).filter(Boolean))].sort(),
+    [transactions])
+
+  const filteredTx = useMemo(() => {
+    let rows = transactions
+    if (securityFilter.length) rows = rows.filter(t => securityFilter.includes(t.security_label || t.symbol))
+    if (typeFilter.length) rows = rows.filter(t => typeFilter.includes(t.tx_type))
+    return rows
+  }, [transactions, securityFilter, typeFilter])
+
+  const toggleFilter = (setter) => (val) => setter(prev => prev.includes(val) ? prev.filter(x => x !== val) : [...prev, val])
+
   // Trends charts data
   const trends = useMemo(() => {
-    if (!transactions.length) return null
-    const sorted = [...transactions]
+    if (!filteredTx.length) return null
+    const sorted = [...filteredTx]
       .filter(t => t.tx_type !== 'split')
       .sort((a, b) => (a.tx_date || a.date) < (b.tx_date || b.date) ? -1 : 1)
     let cumQty = 0, cumFees = 0, cumBuys = 0, cumSells = 0
@@ -241,7 +259,7 @@ export default function TabTransactions() {
       qtyArr.push(cumQty); feesArr.push(cumFees); buysArr.push(cumBuys); sellsArr.push(cumSells)
     })
     return { dates, qtyArr, feesArr, buysArr, sellsArr }
-  }, [transactions])
+  }, [filteredTx])
 
   const typeBadge = (t, qty) => {
     if (t === 'buy') return <span className="badge badge-green">↑ BUY</span>
@@ -297,6 +315,36 @@ export default function TabTransactions() {
         </select>
       </div>
 
+      {/* Security / type filters */}
+      <Expander title="Filters">
+        <div className="space-y-3">
+          <div>
+            <span className="text-xs text-gray-500 mr-1">Security:</span>
+            <div className="flex flex-wrap gap-1.5 mt-1">
+              {securityOptions.map(s => (
+                <button key={s}
+                  className={`badge cursor-pointer ${securityFilter.includes(s) ? 'badge-blue' : 'bg-surface-3 text-gray-400'}`}
+                  onClick={() => toggleFilter(setSecurityFilter)(s)}>
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <span className="text-xs text-gray-500 mr-1">Type:</span>
+            <div className="flex flex-wrap gap-1.5 mt-1">
+              {typeOptions.map(t => (
+                <button key={t}
+                  className={`badge cursor-pointer ${typeFilter.includes(t) ? 'badge-blue' : 'bg-surface-3 text-gray-400'}`}
+                  onClick={() => toggleFilter(setTypeFilter)(t)}>
+                  {t.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </Expander>
+
       {/* Portfolio management */}
       <Expander title="Manage Portfolios">
         <PortfolioManager portfolios={portfolios} />
@@ -330,7 +378,7 @@ export default function TabTransactions() {
         {isLoading ? <LoadingOverlay /> : error ? <ErrorMsg error={error} /> : (
           <SortableTable
             columns={COLS}
-            data={transactions}
+            data={filteredTx}
             defaultSort={{ key: 'tx_date', asc: false }}
             searchable searchKeys={['security_label', 'symbol', 'portfolio', 'tx_type']}
             pageSize={20}
