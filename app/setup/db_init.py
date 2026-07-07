@@ -91,8 +91,8 @@ DDL_STATEMENTS = [
         totalDebt          BIGINT,
         currentRatio       REAL,
         bookValue          REAL,
-        operatingCashflow  INTEGER,
-        freeCashflow       INTEGER,
+        operatingCashflow  BIGINT,
+        freeCashflow       BIGINT,
         sharesOutstanding  BIGINT,
         currency           TEXT,
         kpis_updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -250,6 +250,31 @@ def init_db():
             except Exception as exc:
                 logging.warning(f"DDL skipped: {exc}")
                 skipped += 1
+
+    if is_postgres:
+        # The 'Default' portfolio is seeded with an explicit id=1, which
+        # doesn't advance Postgres' SERIAL sequence — without this, the next
+        # plain INSERT (no explicit id) collides with id=1.
+        with engine.begin() as conn:
+            conn.execute(text(
+                "SELECT setval(pg_get_serial_sequence('portfolios', 'id'), "
+                "COALESCE((SELECT MAX(id) FROM portfolios), 1))"
+            ))
+
+        # Migration: operatingCashflow/freeCashflow were originally declared
+        # INTEGER (max ~2.1B), too small for large-cap cashflow figures.
+        # CREATE TABLE IF NOT EXISTS above won't widen an already-existing
+        # column, so do it explicitly — safe/idempotent to rerun.
+        with engine.begin() as conn:
+            for col in ("operatingCashflow", "freeCashflow"):
+                try:
+                    # Unquoted: Postgres folds this to the actual (lowercase)
+                    # column name, same reasoning as elsewhere in db_utils.py.
+                    conn.execute(text(
+                        f"ALTER TABLE securities_cache ALTER COLUMN {col} TYPE BIGINT"
+                    ))
+                except Exception as exc:
+                    logging.warning(f"Column widen skipped for {col}: {exc}")
 
     logging.info(f"Schema initialised on {dialect}: {ok} statements OK, {skipped} skipped.")
 

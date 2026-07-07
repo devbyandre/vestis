@@ -68,10 +68,19 @@ def main():
         sys.exit(1)
     portfolio_id = portfolio["id"]
 
-    existing = db.list_transactions([portfolio_id])
-    if existing is not None and not existing.empty:
+    # NOTE: deliberately not using db.list_transactions() here — it joins
+    # securities_cache via quoted "longName" and currently raises
+    # UndefinedColumn on real Postgres (pre-existing bug, see conversation).
+    # A plain count avoids that codepath entirely.
+    from sqlalchemy import text as _sa_text
+    with db.get_engine().connect() as _conn:
+        tx_count = _conn.execute(
+            _sa_text("SELECT COUNT(*) FROM transactions WHERE portfolio_id = :pid"),
+            {"pid": portfolio_id},
+        ).scalar()
+    if tx_count:
         log.info(
-            f"'{DEFAULT_PORTFOLIO}' already has {len(existing)} transaction(s) — "
+            f"'{DEFAULT_PORTFOLIO}' already has {tx_count} transaction(s) — "
             "skipping seed (script is idempotent). Delete them via the UI/API first "
             "if you want to reseed from scratch."
         )

@@ -197,6 +197,14 @@ def list_portfolios() -> pd.DataFrame:
     return _read_sql("SELECT id, name FROM portfolios ORDER BY name")
 
 
+def insert_portfolio(name: str) -> int:
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(_adapt_sql("INSERT INTO portfolios (name) VALUES (?)"), (name,))
+        conn.commit()
+    return get_portfolio_by_name(name)["id"]
+
+
 def rename_portfolio(old_name: str, new_name: str) -> None:
     with get_conn() as conn:
         conn.cursor().execute(
@@ -244,7 +252,7 @@ def list_securities() -> pd.DataFrame:
     return _read_sql("""
         SELECT s.id,
                s.yahoo_ticker AS symbol,
-               COALESCE(sc."longName", sc."shortName") AS name,
+               COALESCE(sc.longName, sc.shortName) AS name,
                s.isin
         FROM securities s
         LEFT JOIN securities_cache sc ON sc.security_id = s.id
@@ -294,7 +302,7 @@ def list_securities_metadata() -> pd.DataFrame:
     return _read_sql("""
         SELECT s.id,
                s.yahoo_ticker AS symbol,
-               sc."longName" AS name,
+               sc.longName AS name,
                sc.security_type,
                sc.sector,
                sc.industry,
@@ -312,7 +320,7 @@ def update_security(sec_id: int, name: Optional[str] = None, isin: Optional[str]
             cur.execute(_adapt_sql("UPDATE securities SET isin=? WHERE id=?"), (isin, sec_id))
         if name is not None:
             cur.execute(
-                _adapt_sql("""UPDATE securities_cache SET "longName"=? WHERE security_id=?"""),
+                _adapt_sql("""UPDATE securities_cache SET longName=? WHERE security_id=?"""),
                 (name, sec_id),
             )
         conn.commit()
@@ -376,22 +384,22 @@ def store_security_cache(security_id: int, info: dict) -> None:
     cols = ["security_id", "security_type"] + keys + ["kpis_updated_at"]
     data = [security_id, security_type] + data_values + [ts_now]
 
-    # quoted column names for reserved words (e.g. "longName")
-    quoted_cols = [f'"{c}"' if c[0].islower() and c != "security_id" and c != "security_type"
-                   else c for c in cols]
-
+    # Unquoted identifiers: Postgres folds them to lowercase matching the
+    # (unquoted, thus lowercase) columns declared in db_init.py, and SQLite
+    # matches column names case-insensitively regardless of quoting — so
+    # this works on both without needing per-dialect casing.
     ph = ", ".join([_ph()] * len(data))
+    col_list = ", ".join(cols)
 
     update_cols = [c for c in cols if c not in ("security_id",)]
     update_set = ",\n".join([
-        f'"{c}" = EXCLUDED."{c}"'
+        f"{c} = EXCLUDED.{c}"
         if c not in ("shortName", "longName")
-        else f'"{c}" = COALESCE(securities_cache."{c}", EXCLUDED."{c}")'
+        else f"{c} = COALESCE(securities_cache.{c}, EXCLUDED.{c})"
         for c in update_cols
     ])
 
     if _IS_POSTGRES:
-        col_list = ", ".join([f'"{c}"' for c in cols])
         sql = f"""
             INSERT INTO securities_cache ({col_list})
             VALUES ({ph})
@@ -399,7 +407,6 @@ def store_security_cache(security_id: int, info: dict) -> None:
             {update_set}
         """
     else:
-        col_list = ", ".join(cols)
         sql = f"""
             INSERT INTO securities_cache ({col_list})
             VALUES ({ph})
@@ -419,7 +426,7 @@ def store_lazy_security(security_id: int, data: dict) -> None:
         sql = _adapt_sql("""
             INSERT INTO securities_cache (
                 security_id, security_type, country, exchange, sector, industry,
-                "shortName", "longName", "regularMarketPrice"
+                shortName, longName, regularMarketPrice
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (security_id) DO UPDATE SET
@@ -428,9 +435,9 @@ def store_lazy_security(security_id: int, data: dict) -> None:
                 exchange = EXCLUDED.exchange,
                 sector = EXCLUDED.sector,
                 industry = EXCLUDED.industry,
-                "regularMarketPrice" = EXCLUDED."regularMarketPrice",
-                "shortName" = COALESCE(securities_cache."shortName", EXCLUDED."shortName"),
-                "longName"  = COALESCE(securities_cache."longName",  EXCLUDED."longName")
+                regularMarketPrice = EXCLUDED.regularMarketPrice,
+                shortName = COALESCE(securities_cache.shortName, EXCLUDED.shortName),
+                longName  = COALESCE(securities_cache.longName,  EXCLUDED.longName)
         """)
     else:
         sql = """
@@ -469,7 +476,6 @@ def get_security_cache(id: int) -> Optional[pd.DataFrame]:
         return None
 
     data = df.iloc[0].to_dict()
-    currency = data.get("currency", "EUR") or "EUR"
 
     kpi_keys = [
         "security_type", "country", "exchange", "sector", "industry", "shortName", "longName",
@@ -480,8 +486,16 @@ def get_security_cache(id: int) -> Optional[pd.DataFrame]:
         "ebitda", "totalCash", "totalDebt", "currentRatio", "bookValue",
         "operatingCashflow", "freeCashflow", "sharesOutstanding",
     ]
+    # `sc.*` returns Postgres' folded lowercase column names (e.g. "longname"),
+    # but SQLite preserves the declared camelCase. Normalise onto camelCase
+    # keys so callers get a consistent shape regardless of backend.
     for k in kpi_keys:
-        data.setdefault(k, None)
+        if k not in data and k.lower() in data:
+            data[k] = data.pop(k.lower())
+        else:
+            data.setdefault(k, None)
+
+    currency = data.get("currency", "EUR") or "EUR"
 
     monetary_fields = [
         "regularMarketPrice", "fiftyTwoWeekHigh", "fiftyTwoWeekLow", "marketCap", "dividendRate",
@@ -546,7 +560,7 @@ def list_transactions(portfolio_ids: Optional[List[int]] = None) -> pd.DataFrame
     base = """
         SELECT t.*, p.name AS portfolio_name,
                s.yahoo_ticker AS symbol,
-               COALESCE(sc."longName", 'N/A') AS name
+               COALESCE(sc.longName, 'N/A') AS name
         FROM transactions t
         LEFT JOIN portfolios p ON p.id = t.portfolio_id
         LEFT JOIN securities s ON s.id = t.security_id
@@ -563,7 +577,7 @@ def list_transactions_detailed() -> pd.DataFrame:
     return _read_sql("""
         SELECT t.id, t.portfolio_id, p.name AS portfolio,
                s.yahoo_ticker AS symbol, s.isin,
-               COALESCE(sc."longName", NULL) AS security_name,
+               COALESCE(sc.longName, NULL) AS security_name,
                t.date AS tx_date, t.type AS tx_type,
                t.quantity, t.price, t.fees AS tx_cost
         FROM transactions t
@@ -711,18 +725,27 @@ def get_watchlist() -> pd.DataFrame:
     ]
     df = _read_sql("""
         SELECT s.id AS security_id, s.yahoo_ticker AS symbol,
-               sc."longName" AS security_name, sc."shortName",
+               sc.longName AS security_name, sc.shortName AS "shortName",
                sc.security_type, sc.country, sc.exchange,
                sc.sector, sc.industry, sc.currency,
-               sc."regularMarketPrice", sc."fiftyTwoWeekHigh", sc."fiftyTwoWeekLow",
-               sc.volume, sc."averageVolume", sc."marketCap", sc.beta,
-               sc."trailingPE", sc."forwardPE", sc."trailingEps" AS eps,
-               sc."earningsTimestamp" AS earnings_date, sc."dividendRate", sc."dividendYield",
-               sc."enterpriseValue", sc."profitMargins", sc."operatingMargins",
-               sc."returnOnAssets", sc."returnOnEquity", sc."totalRevenue",
-               sc."revenuePerShare", sc."grossProfits", sc.ebitda,
-               sc."totalCash", sc."totalDebt", sc."currentRatio", sc."bookValue",
-               sc."operatingCashflow", sc."freeCashflow", sc."sharesOutstanding"
+               sc.regularMarketPrice AS "regularMarketPrice",
+               sc.fiftyTwoWeekHigh AS "fiftyTwoWeekHigh",
+               sc.fiftyTwoWeekLow AS "fiftyTwoWeekLow",
+               sc.volume, sc.averageVolume AS "averageVolume",
+               sc.marketCap AS "marketCap", sc.beta,
+               sc.trailingPE AS "trailingPE", sc.forwardPE AS "forwardPE",
+               sc.trailingEps AS eps,
+               sc.earningsTimestamp AS earnings_date,
+               sc.dividendRate AS "dividendRate", sc.dividendYield AS "dividendYield",
+               sc.enterpriseValue AS "enterpriseValue",
+               sc.profitMargins AS "profitMargins", sc.operatingMargins AS "operatingMargins",
+               sc.returnOnAssets AS "returnOnAssets", sc.returnOnEquity AS "returnOnEquity",
+               sc.totalRevenue AS "totalRevenue", sc.revenuePerShare AS "revenuePerShare",
+               sc.grossProfits AS "grossProfits", sc.ebitda,
+               sc.totalCash AS "totalCash", sc.totalDebt AS "totalDebt",
+               sc.currentRatio AS "currentRatio", sc.bookValue AS "bookValue",
+               sc.operatingCashflow AS "operatingCashflow",
+               sc.freeCashflow AS "freeCashflow", sc.sharesOutstanding AS "sharesOutstanding"
         FROM securities s
         LEFT JOIN securities_cache sc ON sc.security_id = s.id
         WHERE s.id NOT IN (
@@ -1056,7 +1079,7 @@ def get_all_alerts(active_only: bool = True) -> pd.DataFrame:
     where = "WHERE a.active=1" if active_only else ""
     return _read_sql(f"""
         SELECT a.id, a.security_id,
-               COALESCE(sc."longName", sc."shortName") AS security_name,
+               COALESCE(sc.longName, sc.shortName) AS security_name,
                s.yahoo_ticker AS symbol,
                a.alert_type, a.params, a.active, a.notify_mode,
                a.cooldown_seconds, a.last_evaluated, a.last_triggered,
@@ -1209,7 +1232,7 @@ def get_holdings_from_transactions(portfolio_ids: Optional[List[int]] = None) ->
     sql = """
         SELECT DISTINCT p.id AS portfolio_id, p.name AS portfolio_name,
                s.id AS security_id, s.yahoo_ticker AS symbol,
-               sc."longName" AS security_name
+               sc.longName AS security_name
         FROM transactions t
         INNER JOIN portfolios p ON p.id = t.portfolio_id
         INNER JOIN securities s ON s.id = t.security_id
@@ -1282,7 +1305,7 @@ def get_holdings_timeseries(
         SELECT ht.date, ht.portfolio_id, ht.security_id,
                ht.quantity, ht.market_value, ht.cost_basis,
                s.yahoo_ticker AS symbol,
-               COALESCE(sc."longName", s.yahoo_ticker, 'Unknown') AS name,
+               COALESCE(sc.longName, s.yahoo_ticker, 'Unknown') AS name,
                COALESCE(sc.sector,'Unknown') AS sector,
                COALESCE(sc.industry,'Unknown') AS industry,
                COALESCE(sc.exchange,'Unknown') AS exchange,
