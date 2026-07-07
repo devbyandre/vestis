@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { fmt, pnlColor, pnlBg, sortBy, groupBy, clamp, kpiColor, temperatureBadgeClass } from './utils'
+import {
+  fmt, pnlColor, pnlBg, sortBy, groupBy, clamp, kpiColor, temperatureBadgeClass,
+  distributionStats, normalPdf, linspace,
+} from './utils'
 
 describe('fmt.currency', () => {
   it('formats a positive value in EUR', () => {
@@ -108,5 +111,49 @@ describe('temperatureBadgeClass', () => {
     expect(temperatureBadgeClass('Warm')).toContain('orange')
     expect(temperatureBadgeClass('Cold')).toContain('blue')
     expect(temperatureBadgeClass(undefined)).toContain('gray')
+  })
+})
+
+describe('distributionStats', () => {
+  it('computes mean/std for a simple series', () => {
+    const s = distributionStats([1, 2, 3, 4, 5])
+    expect(s.n).toBe(5)
+    expect(s.mean).toBeCloseTo(3)
+    expect(s.std).toBeCloseTo(Math.sqrt(2), 5)
+  })
+  it('is symmetric (skew ~0, excess kurtosis ~-1.3) for a uniform-ish symmetric series', () => {
+    const s = distributionStats([1, 2, 3, 4, 5])
+    expect(s.skew).toBeCloseTo(0, 5)
+  })
+  it('detects positive skew for a right-tailed series', () => {
+    const s = distributionStats([1, 1, 1, 1, 10])
+    expect(s.skew).toBeGreaterThan(0)
+  })
+  it('ignores null/NaN entries', () => {
+    const s = distributionStats([1, 2, null, 3, NaN, 4, 5])
+    expect(s.n).toBe(5)
+  })
+  it('returns nulls for an empty series', () => {
+    const s = distributionStats([])
+    expect(s).toEqual({ n: 0, mean: null, std: null, skew: null, kurtosis: null })
+  })
+})
+
+describe('normalPdf', () => {
+  it('peaks at the mean', () => {
+    expect(normalPdf(0, 0, 1)).toBeGreaterThan(normalPdf(1, 0, 1))
+    expect(normalPdf(0, 0, 1)).toBeCloseTo(1 / Math.sqrt(2 * Math.PI), 5)
+  })
+  it('returns 0 for zero std (avoids divide-by-zero)', () => {
+    expect(normalPdf(5, 5, 0)).toBe(0)
+  })
+})
+
+describe('linspace', () => {
+  it('produces evenly spaced points including both endpoints', () => {
+    expect(linspace(0, 10, 5)).toEqual([0, 2.5, 5, 7.5, 10])
+  })
+  it('returns just the min for count <= 1', () => {
+    expect(linspace(0, 10, 1)).toEqual([0])
   })
 })

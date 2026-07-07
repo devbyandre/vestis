@@ -2,8 +2,8 @@ import { useState, lazy, Suspense } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { analyticsApi, securitiesApi } from '../lib/api'
 import { qk } from '../lib/queryClient'
-import { fmt, plotlyConfig } from '../lib/utils'
-import { LoadingOverlay, ErrorMsg, MetricCard, SectionHeader } from '../components/ui'
+import { fmt, plotlyConfig, distributionStats, normalPdf, linspace } from '../lib/utils'
+import { LoadingOverlay, ErrorMsg, MetricCard, SectionHeader, Expander } from '../components/ui'
 
 const Plot = lazy(() => import('react-plotly.js'))
 function LazyPlot(props) {
@@ -28,6 +28,117 @@ const SMA_CHOICES = [5, 10, 20, 50, 100, 200]
 const EMA_CHOICES = [5, 10, 20, 50, 100, 200]
 const SMA_COLORS = { 5: '#f59e0b', 10: '#fb923c', 20: '#facc15', 50: '#84cc16', 100: '#14b8a6', 200: '#38bdf8' }
 const EMA_COLORS = { 5: '#a78bfa', 10: '#c084fc', 20: '#e879f9', 50: '#f472b6', 100: '#fb7185', 200: '#f87171' }
+
+// ── Return Distribution ──────────────────────────────────────────────────────
+// Histogram of daily returns + fitted normal curve + ±1σ/±2σ lines, matching
+// app_streamlit.py's per-symbol Return Distribution section.
+function ReturnDistribution({ symbol, closes }) {
+  const returns = closes
+    .map((c, i) => (i > 0 && closes[i - 1] ? (c - closes[i - 1]) / closes[i - 1] : null))
+    .filter(v => v != null)
+
+  if (returns.length < 5) return <div className="text-gray-600 text-sm py-4">Not enough data.</div>
+
+  const { mean, std, skew, kurtosis } = distributionStats(returns)
+  const xs = linspace(Math.min(...returns), Math.max(...returns), 200)
+  const ys = xs.map(x => normalPdf(x, mean, std))
+  const maxY = Math.max(...ys, 0.001) * 1.1
+
+  const sigmaLine = (mult, color) => {
+    const x = mean + mult * std
+    return { x0: x, x1: x, y0: 0, y1: maxY, color }
+  }
+  const shapes = [-2, -1, 1, 2].map(mult => {
+    const l = sigmaLine(mult, '#f59e0b')
+    return { type: 'line', x0: l.x0, x1: l.x1, y0: l.y0, y1: l.y1, line: { color: l.color, dash: 'dot', width: 1 } }
+  })
+
+  return (
+    <div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+        <MetricCard label="Mean" value={fmt.pct(mean, 4)} />
+        <MetricCard label="Std Dev" value={fmt.pct(std, 4)} />
+        <MetricCard label="Skew" value={skew != null ? skew.toFixed(2) : '—'} />
+        <MetricCard label="Kurtosis" value={kurtosis != null ? kurtosis.toFixed(2) : '—'} />
+      </div>
+      <LazyPlot
+        data={[
+          { x: returns, type: 'histogram', nbinsx: 50, histnorm: 'probability density', marker: { color: '#38bdf8', opacity: 0.6 }, name: 'Returns' },
+          { x: xs, y: ys, type: 'scatter', mode: 'lines', name: 'Normal fit', line: { color: '#ef4444', dash: 'dash', width: 1.5 } },
+        ]}
+        layout={{
+          ...BASE, title: { text: `${symbol} — Daily Return Distribution`, font: { color: '#d1d5db', size: 13 } },
+          xaxis: { ...BASE.xaxis, tickformat: '.1%' }, shapes, height: 300, showlegend: false,
+        }}
+        config={plotlyConfig} style={{ width: '100%' }} useResizeHandler
+      />
+    </div>
+  )
+}
+
+// ── Fundamentals / KPI grid ───────────────────────────────────────────────────
+// Matches app_streamlit.py's "Technical KPIs & Financial Overview" — 7 groups.
+const FUNDAMENTALS_GROUPS = [
+  { title: 'Risk & Performance', fields: [
+    ['Volatility', m => fmt.pct(m.metrics?.volatility)],
+    ['Sharpe', m => m.metrics?.sharpe != null ? m.metrics.sharpe.toFixed(2) : '—'],
+    ['Sortino', m => m.metrics?.sortino != null ? m.metrics.sortino.toFixed(2) : '—'],
+    ['Max Drawdown', m => fmt.pct(m.metrics?.max_drawdown)],
+    ['CAGR', m => fmt.pct(m.metrics?.cagr)],
+    ['Calmar', m => m.metrics?.calmar != null ? m.metrics.calmar.toFixed(2) : '—'],
+    ['Treynor', m => m.metrics?.treynor != null ? m.metrics.treynor.toFixed(2) : '—'],
+  ] },
+  { title: 'Market Data', fields: [
+    ['Price', m => fmt.currency(m.basic?.regularMarketPrice, 2)],
+    ['52w Low', m => fmt.currency(m.basic?.fiftyTwoWeekLow, 2)],
+    ['52w High', m => fmt.currency(m.basic?.fiftyTwoWeekHigh, 2)],
+  ] },
+  { title: 'Valuation', fields: [
+    ['Trailing P/E', m => m.basic?.trailingPE != null ? Number(m.basic.trailingPE).toFixed(1) : '—'],
+    ['Forward P/E', m => m.basic?.forwardPE != null ? Number(m.basic.forwardPE).toFixed(1) : '—'],
+    ['Enterprise Value', m => fmt.currency(m.basic?.enterpriseValue, 0)],
+    ['Profit Margin', m => fmt.pct(m.basic?.profitMargins)],
+    ['Operating Margin', m => fmt.pct(m.basic?.operatingMargins)],
+  ] },
+  { title: 'Revenue & Profits', fields: [
+    ['Total Revenue', m => fmt.currency(m.basic?.totalRevenue, 0)],
+    ['Revenue / Share', m => fmt.currency(m.basic?.revenuePerShare, 2)],
+    ['Gross Profits', m => fmt.currency(m.basic?.grossProfits, 0)],
+    ['EBITDA', m => fmt.currency(m.basic?.ebitda, 0)],
+  ] },
+  { title: 'Balance Sheet', fields: [
+    ['Total Cash', m => fmt.currency(m.basic?.totalCash, 0)],
+    ['Total Debt', m => fmt.currency(m.basic?.totalDebt, 0)],
+    ['Current Ratio', m => m.basic?.currentRatio != null ? Number(m.basic.currentRatio).toFixed(2) : '—'],
+    ['Book Value', m => fmt.currency(m.basic?.bookValue, 2)],
+  ] },
+  { title: 'Cash Flow', fields: [
+    ['Operating CF', m => fmt.currency(m.basic?.operatingCashflow, 0)],
+    ['Free Cash Flow', m => fmt.currency(m.basic?.freeCashflow, 0)],
+  ] },
+  { title: 'Shares', fields: [
+    ['Shares Outstanding', m => m.basic?.sharesOutstanding != null ? fmt.num(m.basic.sharesOutstanding, 0) : '—'],
+    ['Market Cap', m => fmt.currency(m.basic?.marketCap, 0)],
+  ] },
+]
+
+function FundamentalsGrid({ basic, metrics }) {
+  const ctx = { basic, metrics }
+  return (
+    <div className="space-y-4">
+      {FUNDAMENTALS_GROUPS.map(g => (
+        <div key={g.title}>
+          <p className="text-xs font-semibold text-gray-400 mb-2">{g.title}</p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {g.fields.map(([label, fn]) => (
+              <MetricCard key={label} label={label} value={fn(ctx)} />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 export default function TabTechnical() {
   const [symbol, setSymbol] = useState('')
@@ -54,6 +165,11 @@ export default function TabTechnical() {
   const { data: result, isLoading, error } = useQuery({
     queryKey: qk.indicators(symbol, opts),
     queryFn: () => analyticsApi.indicators(symbol, opts),
+    enabled: !!symbol,
+  })
+  const { data: basic } = useQuery({
+    queryKey: qk.security(symbol),
+    queryFn: () => securitiesApi.getBasic(symbol),
     enabled: !!symbol,
   })
 
@@ -232,6 +348,14 @@ export default function TabTechnical() {
               />
             </div>
           )}
+
+          <Expander title="Return Distribution">
+            <ReturnDistribution symbol={symbol} closes={closes} />
+          </Expander>
+
+          <Expander title="Fundamentals & Financial Overview" defaultOpen>
+            {basic ? <FundamentalsGrid basic={basic} metrics={metrics} /> : <LoadingOverlay label="Loading fundamentals…" />}
+          </Expander>
         </>
       )}
     </div>

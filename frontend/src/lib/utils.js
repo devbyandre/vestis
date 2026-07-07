@@ -117,3 +117,35 @@ export const groupBy = (arr, key) =>
 
 // Clamp
 export const clamp = (v, min, max) => Math.min(Math.max(v, min), max)
+
+// Distribution stats for a Return Distribution chart (Technical Analysis).
+// Matches scipy.stats.skew/kurtosis defaults (bias=True, Fisher excess
+// kurtosis) — the same formulas app_streamlit.py uses.
+export function distributionStats(values) {
+  const arr = values.filter(v => v != null && !isNaN(v))
+  const n = arr.length
+  if (n === 0) return { n: 0, mean: null, std: null, skew: null, kurtosis: null }
+  const mean = arr.reduce((s, v) => s + v, 0) / n
+  const m2 = arr.reduce((s, v) => s + (v - mean) ** 2, 0) / n
+  const m3 = arr.reduce((s, v) => s + (v - mean) ** 3, 0) / n
+  const m4 = arr.reduce((s, v) => s + (v - mean) ** 4, 0) / n
+  return {
+    n,
+    mean,
+    std: Math.sqrt(m2),
+    skew: m2 > 0 ? m3 / m2 ** 1.5 : null,
+    kurtosis: m2 > 0 ? m4 / m2 ** 2 - 3 : null,
+  }
+}
+
+export function normalPdf(x, mean, std) {
+  if (!std) return 0
+  return (1 / (std * Math.sqrt(2 * Math.PI))) * Math.exp(-0.5 * ((x - mean) / std) ** 2)
+}
+
+// Evenly spaced points from min to max (inclusive), like numpy.linspace.
+export function linspace(min, max, count) {
+  if (count <= 1) return [min]
+  const step = (max - min) / (count - 1)
+  return Array.from({ length: count }, (_, i) => min + step * i)
+}
