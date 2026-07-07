@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.dev.example
 
 # ── Database files ──────────────────────────────────────────────────────────
 *.db
@@ -40,3 +41,9 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+*:Zone.Identifier
+
+# ── Node / frontend ──────────────────────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/node_modules/
