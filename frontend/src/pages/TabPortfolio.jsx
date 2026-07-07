@@ -1,8 +1,9 @@
 import { useState, useMemo, lazy, Suspense } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { holdingsApi, portfolioApi } from '../lib/api'
+import { holdingsApi, portfolioApi, planningApi } from '../lib/api'
 import { qk } from '../lib/queryClient'
-import { fmt, pnlColor, plotlyConfig } from '../lib/utils'
+import { fmt, pnlColor, plotlyConfig, kpiColor, temperatureBadgeClass } from '../lib/utils'
+import { clsx } from 'clsx'
 import {
   LoadingOverlay, ErrorMsg, MetricCard, SortableTable,
   PnlBadge, Expander, SectionHeader,
@@ -316,6 +317,10 @@ export default function TabPortfolio() {
     queryKey: qk.holdingsMetrics(selectedIds),
     queryFn: () => holdingsApi.metrics(selectedIds),
   })
+  const { data: kpiRows = [] } = useQuery({
+    queryKey: qk.kpis(selectedIds),
+    queryFn: () => planningApi.kpis(selectedIds),
+  })
 
   const filtered = useMemo(() => {
     let rows = snapshot
@@ -347,6 +352,19 @@ export default function TabPortfolio() {
     { key: 'sector', label: 'Sector' },
     { key: 'abs_perf', label: 'Abs P&L', align: 'right', render: v => <span className={pnlColor(v)}>{fmt.currency(v)}</span>, exportValue: v => v },
     { key: 'rel_perf', label: 'Rel P&L', align: 'right', render: v => <PnlBadge value={v} multiplier={1} />, exportValue: v => v },
+  ]
+
+  const KPI_COLS = [
+    { key: 'security_label', label: 'Security' },
+    { key: 'regularMarketPrice', label: 'Price', align: 'right', render: v => v != null ? fmt.currency(v, 2) : '—' },
+    { key: 'fiftyTwoWeekLow', label: '52w Low', align: 'right', render: v => v != null ? fmt.currency(v, 2) : '—' },
+    { key: 'fiftyTwoWeekHigh', label: '52w High', align: 'right', render: v => v != null ? fmt.currency(v, 2) : '—' },
+    { key: 'beta', label: 'Beta', align: 'right', render: v => <span className={kpiColor.beta(v)}>{v != null ? Number(v).toFixed(2) : '—'}</span> },
+    { key: 'trailingPE', label: 'P/E', align: 'right', render: v => <span className={kpiColor.pe(v)}>{v != null ? Number(v).toFixed(1) : '—'}</span> },
+    { key: 'pb_ratio', label: 'P/B', align: 'right', render: v => <span className={kpiColor.pb(v)}>{v != null ? Number(v).toFixed(2) : '—'}</span> },
+    { key: 'dividendYield', label: 'Div Yield', align: 'right', render: v => <span className={kpiColor.divYield(v)}>{v != null ? fmt.pct(v, 2) : '—'}</span> },
+    { key: 'profitMargins', label: 'Profit Margin', align: 'right', render: v => <span className={kpiColor.profitMargin(v)}>{v != null ? fmt.pct(v, 1) : '—'}</span> },
+    { key: 'Temperature', label: 'Temp', render: v => <span className={clsx('badge', temperatureBadgeClass(v))}>{v || '—'}</span> },
   ]
 
   const toggleGroup = (name) =>
@@ -412,6 +430,17 @@ export default function TabPortfolio() {
               searchable searchKeys={['security_label', 'sector']}
               exportable exportName="holdings" />
           </div>
+
+          <Expander title="Holdings KPIs">
+            {kpiRows.length === 0 ? (
+              <div className="text-gray-600 text-sm py-4">No KPI data available yet.</div>
+            ) : (
+              <SortableTable columns={KPI_COLS} data={kpiRows}
+                defaultSort={{ key: 'security_label', asc: true }}
+                searchable searchKeys={['security_label']}
+                exportable exportName="holdings-kpis" />
+            )}
+          </Expander>
 
           <Expander title="Performance Bubble Chart">
             <BubbleChart rows={filtered} selectedGroups={selectedGroups} onToggleGroup={toggleGroup} />

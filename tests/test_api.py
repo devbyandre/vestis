@@ -273,6 +273,23 @@ class TestPlanningAPI:
         assert r.status_code == 200
         assert r.json() == []
 
+    def test_kpis_includes_pb_ratio_and_temperature(self, api_client, db_path):
+        # Regression test: /planning/kpis previously omitted pb_ratio and
+        # Temperature (present in the near-identical GET /watchlist shape),
+        # since it didn't run the snapshot through calc_security_KPIs.
+        sec_id = seed_security(db_path, "AAPL")
+        seed(db_path,
+             "INSERT INTO prices (security_id, date, open, high, low, close, adj_close, volume) "
+             "VALUES (?, '2023-06-01', 150, 150, 150, 150, 150, 1000)", (sec_id,))
+        api_client.post("/transactions", json={
+            "portfolio_id": 1, "symbol": "AAPL", "tx_date": "2023-06-01",
+            "tx_type": "buy", "quantity": 10, "price": 150.0, "fees": 0.0,
+        })
+        rows = api_client.get("/planning/kpis").json()
+        assert len(rows) == 1
+        assert "pb_ratio" in rows[0]
+        assert "Temperature" in rows[0]
+
     def test_taxonomy_is_dict(self, api_client):
         r = api_client.get("/planning/taxonomy")
         assert r.status_code == 200

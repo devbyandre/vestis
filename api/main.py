@@ -715,7 +715,7 @@ def get_kpis(portfolio_ids: Optional[str] = Query(None)):
     rows = _df(snap)
     # Enrich each holding with cached fundamentals (beta, P/E, dividend yield, RSI, etc.)
     cache = {}
-    enrich_fields = ["beta", "trailingPE", "forwardPE", "trailingEps",
+    enrich_fields = ["regularMarketPrice", "bookValue", "beta", "trailingPE", "forwardPE", "trailingEps",
                      "dividendRate", "dividendYield", "marketCap", "rsi",
                      "fiftyTwoWeekHigh", "fiftyTwoWeekLow", "profitMargins"]
     for r in rows:
@@ -731,6 +731,11 @@ def get_kpis(portfolio_ids: Optional[str] = Query(None)):
         for f in enrich_fields:
             if f not in r or r.get(f) is None:
                 r[f] = _safe_float(basic.get(f)) if isinstance(basic.get(f), (int, float)) else basic.get(f)
+
+    # pb_ratio/Temperature — same scoring the Watchlist tab uses, so both
+    # tables are consistent.
+    if rows:
+        rows = _df(mw.calc_security_KPIs(pd.DataFrame(rows)))
     return rows
 
 @app.get("/planning/taxonomy")
