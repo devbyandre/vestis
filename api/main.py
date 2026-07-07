@@ -448,44 +448,58 @@ def get_rebalancing(portfolio_ids: Optional[str] = Query(None), retirement_year:
 
 
 @app.get("/planning/allocation-over-time")
-def get_allocation_over_time(portfolio_ids: Optional[str] = Query(None)):
-    """Asset-type allocation (fraction of market value) over time, for the area chart."""
+def get_allocation_over_time(
+    portfolio_ids: Optional[str] = Query(None),
+    group_by: str = "security_type",
+):
+    """Allocation (fraction of market value) over time, for the area chart.
+    group_by: security_type (default) | sector | industry | symbol.
+    For symbol, only the top 10 securities by latest market value keep
+    their own series — the rest are bucketed into "Other" (matches
+    app_streamlit.py's "Top 10 Securities" chart)."""
+    if group_by not in ("security_type", "sector", "industry", "symbol"):
+        raise HTTPException(400, "group_by must be one of: security_type, sector, industry, symbol")
     ids = [int(x) for x in portfolio_ids.split(",")] if portfolio_ids else None
     ts = mw.holdings_timeseries(portfolio_ids=ids, aggregate=False)
     if ts is None or ts.empty:
         return {"dates": [], "series": {}}
     ts = ts.copy()
-    if "security_type" not in ts.columns:
-        # Join security_type from snapshot
-        snap = mw.get_latest_holdings_snapshot(portfolio_ids=ids, aggregate=False)
-        type_map = {}
-        if snap is not None and not snap.empty and "security_id" in snap.columns:
-            for _, r in snap.iterrows():
-                type_map[r.get("security_id")] = r.get("security_type") or "Other"
-        ts["security_type"] = ts.get("security_id", pd.Series([None]*len(ts))).map(type_map).fillna("Other")
     ts["date"] = pd.to_datetime(ts["date"]).dt.strftime("%Y-%m-%d")
     ts["market_value"] = pd.to_numeric(ts.get("market_value", 0), errors="coerce").fillna(0)
-    # Pivot: by date and type
-    grouped = ts.groupby(["date", "security_type"])["market_value"].sum().reset_index()
+
+    group_col = group_by
+    if group_by == "symbol":
+        latest_date = ts["date"].max()
+        top10 = (
+            ts[ts["date"] == latest_date]
+            .groupby("symbol")["market_value"].sum()
+            .sort_values(ascending=False).head(10).index
+        )
+        ts["symbol_group"] = ts["symbol"].where(ts["symbol"].isin(top10), "Other")
+        group_col = "symbol_group"
+
+    grouped = ts.groupby(["date", group_col])["market_value"].sum().reset_index()
     dates = sorted(grouped["date"].unique().tolist())
-    types = sorted(grouped["security_type"].unique().tolist())
-    # Build fraction series
-    series = {t: [] for t in types}
+    groups = sorted(grouped[group_col].unique().tolist())
+    series = {g: [] for g in groups}
     for d in dates:
         day = grouped[grouped["date"] == d]
         total = day["market_value"].sum() or 1.0
-        for t in types:
-            row = day[day["security_type"] == t]
+        for g in groups:
+            row = day[day[group_col] == g]
             val = float(row["market_value"].sum()) / total if not row.empty else 0.0
-            series[t].append(val)
+            series[g].append(val)
     return {"dates": dates, "series": series}
 
 
 @app.get("/planning/risk-over-time")
-def get_risk_over_time(portfolio_ids: Optional[str] = Query(None)):
-    """Aggregated portfolio risk over time."""
+def get_risk_over_time(portfolio_ids: Optional[str] = Query(None), aggregate: bool = True):
+    """Portfolio risk over time. aggregate=True (default): date+weighted_risk
+    only. aggregate=False: per-security rows (symbol/sector/industry/
+    security_type/weighted_risk) for the risk-by-category and
+    top-10-by-risk-contribution charts."""
     ids = [int(x) for x in portfolio_ids.split(",")] if portfolio_ids else None
-    df = mw.fetch_portfolio_risk_timeseries(portfolio_ids=ids, aggregate=True)
+    df = mw.fetch_portfolio_risk_timeseries(portfolio_ids=ids, aggregate=aggregate)
     if df is None or df.empty:
         return []
     df = df.copy()

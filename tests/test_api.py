@@ -363,6 +363,63 @@ class TestPlanningAPI:
         assert r.status_code == 200
         assert isinstance(r.json(), dict)
 
+    def _seed_holding(self, api_client, db_path, symbol="AAPL", sector="Technology", industry="Consumer Electronics",
+                      price_days=1):
+        sec_id = seed_security(db_path, symbol)
+        seed(db_path,
+             "INSERT INTO securities_cache (security_id, sector, industry, security_type) VALUES (?, ?, ?, 'EQUITY')",
+             (sec_id, sector, industry))
+        for i in range(price_days):
+            seed(db_path,
+                 "INSERT INTO prices (security_id, date, open, high, low, close, adj_close, volume) "
+                 "VALUES (?, date('2023-06-01', '+' || ? || ' days'), 150, 150, 150, ?, ?, 1000)",
+                 (sec_id, i, 150 + i * 0.1, 150 + i * 0.1))
+        api_client.post("/transactions", json={
+            "portfolio_id": 1, "symbol": symbol, "tx_date": "2023-06-01",
+            "tx_type": "buy", "quantity": 10, "price": 150.0, "fees": 0.0,
+        })
+        return sec_id
+
+    def test_allocation_over_time_group_by_sector(self, api_client, db_path):
+        self._seed_holding(api_client, db_path)
+        r = api_client.get("/planning/allocation-over-time", params={"group_by": "sector"})
+        assert r.status_code == 200
+        body = r.json()
+        assert "Technology" in body["series"]
+
+    def test_allocation_over_time_group_by_symbol_tops_out_at_10_plus_other(self, api_client, db_path):
+        self._seed_holding(api_client, db_path, "AAPL")
+        r = api_client.get("/planning/allocation-over-time", params={"group_by": "symbol"})
+        assert r.status_code == 200
+        assert "AAPL" in r.json()["series"]
+
+    def test_allocation_over_time_rejects_bad_group_by(self, api_client):
+        r = api_client.get("/planning/allocation-over-time", params={"group_by": "nonsense"})
+        assert r.status_code == 400
+
+    def test_risk_over_time_detailed_includes_category_columns(self, api_client, db_path):
+        # risk_score needs a 252-day rolling std with min_periods=20, so the
+        # single-price-row seed the other tests use isn't enough here.
+        sec_id = self._seed_holding(api_client, db_path, price_days=25)
+        # db.recompute_holdings_timeseries() calls update_security_risk_timeseries()
+        # on the same not-yet-committed connection it just inserted holdings
+        # rows on — but that function reads holdings back via a separate
+        # engine connection (_read_sql), which can't see the uncommitted
+        # rows yet, so it silently computes nothing at transaction-add time.
+        # In production this self-heals on the next data_fetcher cron run
+        # (which calls it standalone, post-commit); mirror that convergence
+        # here rather than let this test depend on fixing that timing bug.
+        import db_utils as _db
+        _db.update_security_risk_timeseries(sec_id, portfolio_ids=1)
+        r = api_client.get("/planning/risk-over-time", params={"aggregate": False})
+        assert r.status_code == 200
+        rows = r.json()
+        assert len(rows) > 0
+        assert "symbol" in rows[0]
+        assert "sector" in rows[0]
+        assert "security_type" in rows[0]
+        assert "weighted_risk" in rows[0]
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Settings

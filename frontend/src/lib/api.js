@@ -105,10 +105,10 @@ export const planningApi = {
     get('/planning/portfolio-symbols', { portfolio_ids: portfolio_ids?.join(',') }),
   rebalancing: (portfolio_ids, retirement_year) =>
     get('/analytics/rebalancing', { portfolio_ids: portfolio_ids?.join(','), retirement_year }),
-  allocationOverTime: (portfolio_ids) =>
-    get('/planning/allocation-over-time', { portfolio_ids: portfolio_ids?.join(',') }),
-  riskOverTime: (portfolio_ids) =>
-    get('/planning/risk-over-time', { portfolio_ids: portfolio_ids?.join(',') }),
+  allocationOverTime: (portfolio_ids, group_by = 'security_type') =>
+    get('/planning/allocation-over-time', { portfolio_ids: portfolio_ids?.join(','), group_by }),
+  riskOverTime: (portfolio_ids, aggregate = true) =>
+    get('/planning/risk-over-time', { portfolio_ids: portfolio_ids?.join(','), aggregate }),
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
