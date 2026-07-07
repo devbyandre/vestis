@@ -1871,6 +1871,22 @@ def suggest_rebalancing(
                 if abs(adj_pct) > 0.01:
                     add_action(sym, adj_pct, adj_pct*total_value, reason, impact_allocation=abs(adj_pct))
 
+    # --- Security-level target adjustments ---
+    security_config = safe_json_load(get_config("target_security_allocation"), {})
+    security_deltas = compute_delta(security_config, security_weights)
+    # compute_delta only sees currently-held securities (security_weights is
+    # grouped from current holdings) — a security with a target but zero
+    # current weight needs its own delta so it still gets suggested.
+    for sym, target in security_config.items():
+        if sym not in security_weights.index and sym in valid_syms and abs(target) > threshold:
+            security_deltas[sym] = target
+
+    for sym, delta in security_deltas.items():
+        if sym not in valid_syms or abs(delta) <= 0.01:
+            continue
+        reason = f"Adjust '{sym}' toward its target weight ({'increase' if delta > 0 else 'reduce'})"
+        add_action(sym, delta, delta * total_value, reason, impact_allocation=abs(delta))
+
     # --- Risk adjustments ---
     avg_risk = df['risk_pct'].mean()
     risk_threshold = avg_risk * 1.5

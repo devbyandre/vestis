@@ -303,6 +303,33 @@ class TestAnalyticsAPI:
         for key in body["industry_weights"]:
             assert isinstance(key, str)
 
+    def test_rebalancing_includes_security_level_target_suggestion(self, api_client, db_path):
+        # target_security_allocation was UI-only in Streamlit (computed, then
+        # silently never saved or read by suggest_rebalancing). This confirms
+        # the fixed version actually feeds security-level targets into
+        # rebalancing suggestions.
+        held_id = seed_security(db_path, "AAPL")
+        seed(db_path,
+             "INSERT INTO securities_cache (security_id, sector, industry, security_type) "
+             "VALUES (?, 'Technology', 'Consumer Electronics', 'EQUITY')", (held_id,))
+        seed(db_path,
+             "INSERT INTO prices (security_id, date, open, high, low, close, adj_close, volume) "
+             "VALUES (?, '2023-06-01', 150, 150, 150, 150, 150, 1000)", (held_id,))
+        api_client.post("/transactions", json={
+            "portfolio_id": 1, "symbol": "AAPL", "tx_date": "2023-06-01",
+            "tx_type": "buy", "quantity": 10, "price": 150.0, "fees": 0.0,
+        })
+        # Target AAPL at 0% (holding it entirely, so this should trigger a
+        # large "reduce" suggestion) — bypasses the noisy asset/sector/
+        # industry deltas that would otherwise also fire for this holding.
+        api_client.put("/settings", json={"settings": {"target_security_allocation": {"AAPL": 0.0}}})
+
+        r = api_client.get("/analytics/rebalancing")
+        assert r.status_code == 200
+        suggestions = r.json()["suggestions"]
+        aapl = next(s for s in suggestions if s["symbol"] == "AAPL")
+        assert any("target weight" in reason for reason in aapl["reasons"])
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Planning

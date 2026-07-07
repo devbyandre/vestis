@@ -131,6 +131,7 @@ DEFAULT = {
         "Technology": 0.03
     },
     "target_industry_allocation": {},
+    "target_security_allocation": {},
     "target_risk_profile": {
         "pre_retirement_risk": 0.4,
         "post_retirement_risk": 0.2,
