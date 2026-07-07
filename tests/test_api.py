@@ -262,6 +262,22 @@ class TestAnalyticsAPI:
         r = api_client.get("/analytics/indicators/DOES_NOT_EXIST")
         assert r.status_code == 404
 
+    def test_indicators_includes_cagr_calmar_treynor(self, api_client, db_path):
+        sec_id = seed_security(db_path, "AAPL")
+        seed(db_path,
+             "INSERT INTO securities_cache (security_id, beta) VALUES (?, 1.25)", (sec_id,))
+        for i in range(30):
+            seed(db_path,
+                 "INSERT INTO prices (security_id, date, open, high, low, close, adj_close, volume) "
+                 "VALUES (?, date('now', '-' || (30 - ?) || ' days'), 100, 105, 95, ?, ?, 1000)",
+                 (sec_id, i, 100 + i, 100 + i))
+        r = api_client.get("/analytics/indicators/AAPL")
+        assert r.status_code == 200
+        metrics = r.json()["metrics"]
+        assert "cagr" in metrics
+        assert "calmar" in metrics
+        assert "treynor" in metrics
+
     def test_rebalancing_with_holdings_returns_200(self, api_client, db_path):
         # Regression test: industry_weights is keyed by (sector, industry)
         # tuples internally, which crashed FastAPI's JSON encoder

@@ -599,6 +599,23 @@ def get_indicators(
         }
         if hasattr(mw, "sortino_ratio"):
             metrics["sortino"] = _safe_float(mw.sortino_ratio(price_df, "close"))
+        # cagr/calmar_ratio annualise using (df.index[-1] - df.index[0]).days,
+        # so they need a real DatetimeIndex — the plain RangeIndex above won't do.
+        dated_price_df = price_df.copy()
+        dated_price_df.index = pd.to_datetime([r.get("date") for r in result])
+        if hasattr(mw, "cagr"):
+            metrics["cagr"] = _safe_float(mw.cagr(dated_price_df, "close"))
+        if hasattr(mw, "calmar_ratio"):
+            metrics["calmar"] = _safe_float(mw.calmar_ratio(dated_price_df, "close"))
+        if hasattr(mw, "treynor_ratio"):
+            # Real per-security beta rather than a hardcoded 1.0 (which is what
+            # app_streamlit.py does — it never actually computes beta for this).
+            try:
+                basic = mw.get_security_basic(symbol) or {}
+                beta = _safe_float(basic.get("beta")) or 1.0
+            except Exception:
+                beta = 1.0
+            metrics["treynor"] = _safe_float(mw.treynor_ratio(price_df, "close", beta=beta))
     except Exception:
         metrics = {}
 
