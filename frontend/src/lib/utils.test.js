@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fmt, pnlColor, pnlBg, sortBy, groupBy, clamp } from './utils'
+import { fmt, pnlColor, pnlBg, sortBy, groupBy, clamp, kpiColor, temperatureBadgeClass } from './utils'
 
 describe('fmt.currency', () => {
   it('formats a positive value in EUR', () => {
@@ -80,5 +80,33 @@ describe('clamp', () => {
     expect(clamp(5, 0, 10)).toBe(5)
     expect(clamp(-5, 0, 10)).toBe(0)
     expect(clamp(50, 0, 10)).toBe(10)
+  })
+})
+
+describe('kpiColor', () => {
+  it('beta: green below 1.0, orange up to 1.2, red above', () => {
+    expect(kpiColor.beta(0.8)).toBe('text-green-400')
+    expect(kpiColor.beta(1.1)).toBe('text-orange-400')
+    expect(kpiColor.beta(1.5)).toBe('text-red-400')
+    expect(kpiColor.beta(null)).toBe('')
+  })
+  it('pe: green below 15, orange up to 25, red above', () => {
+    expect(kpiColor.pe(10)).toBe('text-green-400')
+    expect(kpiColor.pe(20)).toBe('text-orange-400')
+    expect(kpiColor.pe(30)).toBe('text-red-400')
+  })
+  it('divYield: green above 3%, orange down to 1%, red below', () => {
+    expect(kpiColor.divYield(0.04)).toBe('text-green-400')
+    expect(kpiColor.divYield(0.02)).toBe('text-orange-400')
+    expect(kpiColor.divYield(0.005)).toBe('text-red-400')
+  })
+})
+
+describe('temperatureBadgeClass', () => {
+  it('maps each temperature to a distinct badge class', () => {
+    expect(temperatureBadgeClass('Hot')).toContain('red')
+    expect(temperatureBadgeClass('Warm')).toContain('orange')
+    expect(temperatureBadgeClass('Cold')).toContain('blue')
+    expect(temperatureBadgeClass(undefined)).toContain('gray')
   })
 })

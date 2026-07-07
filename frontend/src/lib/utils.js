@@ -43,6 +43,23 @@ export const pnlBg = (v) => {
   return v >= 0 ? 'bg-green-500/10' : 'bg-red-500/10'
 }
 
+// KPI threshold colors — shared by Watchlist and Portfolio "Holdings KPIs"
+// tables. Thresholds match app_streamlit.py's display_kpi_table().
+export const kpiColor = {
+  beta: (v) => v == null || isNaN(v) ? '' : v < 1.0 ? 'text-green-400' : v <= 1.2 ? 'text-orange-400' : 'text-red-400',
+  pe: (v) => v == null || isNaN(v) ? '' : v < 15 ? 'text-green-400' : v <= 25 ? 'text-orange-400' : 'text-red-400',
+  pb: (v) => v == null || isNaN(v) ? '' : v < 1.5 ? 'text-green-400' : v <= 3 ? 'text-orange-400' : 'text-red-400',
+  divYield: (v) => v == null || isNaN(v) ? '' : v > 0.03 ? 'text-green-400' : v >= 0.01 ? 'text-orange-400' : 'text-red-400',
+  profitMargin: (v) => v == null || isNaN(v) ? '' : v > 0.2 ? 'text-green-400' : v >= 0.1 ? 'text-orange-400' : 'text-red-400',
+}
+
+export const temperatureBadgeClass = (t) => {
+  if (t === 'Hot') return 'bg-red-500/20 text-red-300'
+  if (t === 'Warm') return 'bg-orange-500/20 text-orange-300'
+  if (t === 'Cold') return 'bg-blue-500/20 text-blue-300'
+  return 'bg-surface-3 text-gray-500'
+}
+
 // Plotly dark theme config
 export const plotlyLayout = (overrides = {}) => ({
   paper_bgcolor: 'transparent',
