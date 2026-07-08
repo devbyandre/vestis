@@ -400,17 +400,16 @@ class TestPlanningAPI:
     def test_risk_over_time_detailed_includes_category_columns(self, api_client, db_path):
         # risk_score needs a 252-day rolling std with min_periods=20, so the
         # single-price-row seed the other tests use isn't enough here.
-        sec_id = self._seed_holding(api_client, db_path, price_days=25)
-        # db.recompute_holdings_timeseries() calls update_security_risk_timeseries()
-        # on the same not-yet-committed connection it just inserted holdings
-        # rows on — but that function reads holdings back via a separate
-        # engine connection (_read_sql), which can't see the uncommitted
-        # rows yet, so it silently computes nothing at transaction-add time.
-        # In production this self-heals on the next data_fetcher cron run
-        # (which calls it standalone, post-commit); mirror that convergence
-        # here rather than let this test depend on fixing that timing bug.
-        import db_utils as _db
-        _db.update_security_risk_timeseries(sec_id, portfolio_ids=1)
+        # Regression test for a timing bug: db.recompute_holdings_timeseries()
+        # used to call update_security_risk_timeseries() on the same
+        # not-yet-committed connection it had just inserted holdings rows
+        # on, but that function read holdings back via a separate engine
+        # connection which couldn't see the uncommitted rows yet — so risk
+        # data silently never populated until some later, unrelated write
+        # committed first. Fixed by passing the just-computed rows through
+        # directly instead of re-querying them. No manual recompute call
+        # here — if the fix regresses, this comes back empty.
+        self._seed_holding(api_client, db_path, price_days=25)
         r = api_client.get("/planning/risk-over-time", params={"aggregate": False})
         assert r.status_code == 200
         rows = r.json()
