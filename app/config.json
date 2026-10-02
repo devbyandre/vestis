@@ -19,13 +19,5 @@
   "target_sector_allocation": "{\"Basic Materials\": 0.03, \"Communication Services\": 0.02, \"Consumer Cyclical\": 0.05, \"Consumer Defensive\": 0.25, \"Energy\": 0.05, \"Financial Services\": 0.3, \"Healthcare\": 0.2, \"Industrials\": 0.05, \"Real Estate\": 0.02, \"Technology\": 0.03}",
   "target_industry_allocation": "{}",
   "target_risk_profile": "{\"pre_retirement_risk\": 0.4, \"post_retirement_risk\": 0.2, \"market_volatility\": 0.15}",
-  "asset_allocation_targets": "{\"pre_retirement\": {\"Equity\": 0.7, \"ETF\": 0.25, \"Bonds\": 0.05}, \"post_retirement\": {\"Equity\": 0.5, \"ETF\": 0.3, \"Bonds\": 0.2}}",
-  "vestis_url": "",
-  "price_refresh_minutes": 60,
-  "price_refresh_hour_utc": 22,
-  "quiet_hours_start": "22:00",
-  "quiet_hours_end": "07:00",
-  "timezone": "Europe/Berlin",
-  "target_security_allocation": {},
-  "last_digest_sent_daily": "2026-10-02T15:06:22.648551"
+  "asset_allocation_targets": "{\"pre_retirement\": {\"Equity\": 0.7, \"ETF\": 0.25, \"Bonds\": 0.05}, \"post_retirement\": {\"Equity\": 0.5, \"ETF\": 0.3, \"Bonds\": 0.2}}"
 }
