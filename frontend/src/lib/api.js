@@ -88,6 +88,12 @@ export const watchlistApi = {
   remove: (symbol) => del('/watchlist', { symbol }),
 }
 
+// ── News ──────────────────────────────────────────────────────────────────────
+export const newsApi = {
+  feed: ({ scope = 'all', symbol, days = 7 } = {}) => get('/news', { scope, symbol: symbol || undefined, days }),
+  refresh: (symbol) => post('/news/refresh', symbol ? { symbol } : {}),
+}
+
 // ── Alerts ────────────────────────────────────────────────────────────────────
 export const alertsApi = {
   list: (active_only = false) => get('/alerts', { active_only }),

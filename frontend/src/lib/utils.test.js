@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   fmt, pnlColor, pnlBg, sortBy, groupBy, clamp, kpiColor, temperatureBadgeClass,
-  distributionStats, normalPdf, linspace,
+  distributionStats, normalPdf, linspace, timeAgo, sentimentLabel, fmtSentiment,
 } from './utils'
 
 describe('fmt.currency', () => {
@@ -155,5 +155,33 @@ describe('linspace', () => {
   })
   it('returns just the min for count <= 1', () => {
     expect(linspace(0, 10, 1)).toEqual([0])
+  })
+})
+
+describe('timeAgo', () => {
+  const now = Date.parse('2026-01-10T12:00:00Z')
+  it('uses minutes, hours and days', () => {
+    expect(timeAgo('2026-01-10T11:59:50Z', now)).toBe('just now')
+    expect(timeAgo('2026-01-10T11:15:00Z', now)).toBe('45 min ago')
+    expect(timeAgo('2026-01-10T09:00:00Z', now)).toBe('3 h ago')
+    expect(timeAgo('2026-01-07T12:00:00Z', now)).toBe('3 d ago')
+  })
+  it('never goes negative for slightly future timestamps and tolerates garbage', () => {
+    expect(timeAgo('2026-01-10T12:05:00Z', now)).toBe('just now')
+    expect(timeAgo('nope', now)).toBe('')
+  })
+})
+
+describe('sentimentLabel', () => {
+  it('uses ±0.2 thresholds like the backend', () => {
+    expect(sentimentLabel(0.2)).toBe('positive')
+    expect(sentimentLabel(0.19)).toBe('neutral')
+    expect(sentimentLabel(-0.2)).toBe('negative')
+    expect(sentimentLabel(null)).toBe('neutral')
+  })
+  it('formats scores with a sign', () => {
+    expect(fmtSentiment(0.5)).toBe('+0.50')
+    expect(fmtSentiment(-0.25)).toBe('-0.25')
+    expect(fmtSentiment(null)).toBe('—')
   })
 })

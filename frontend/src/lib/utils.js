@@ -123,3 +123,28 @@ export function linspace(min, max, count) {
   const step = (max - min) / (count - 1)
   return Array.from({ length: count }, (_, i) => min + step * i)
 }
+
+// "5 min ago", "3 h ago", "2 d ago"; falls back to a date after a week.
+export function timeAgo(iso, now = Date.now()) {
+  const t = Date.parse(iso)
+  if (isNaN(t)) return ''
+  const mins = Math.max(0, Math.round((now - t) / 60000))
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins} min ago`
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return `${hours} h ago`
+  const days = Math.round(hours / 24)
+  if (days < 8) return `${days} d ago`
+  return new Date(t).toLocaleDateString('de-DE')
+}
+
+// Same thresholds as the backend's sentiment.label_for.
+export const sentimentLabel = (v) =>
+  v == null ? 'neutral' : v >= 0.2 ? 'positive' : v <= -0.2 ? 'negative' : 'neutral'
+
+export const sentimentBadgeClass = (v) => {
+  const l = sentimentLabel(v)
+  return l === 'positive' ? 'badge-green' : l === 'negative' ? 'badge-red' : 'bg-surface-3 text-gray-400'
+}
+
+export const fmtSentiment = (v) => (v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(2)}`)

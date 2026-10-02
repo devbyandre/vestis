@@ -54,6 +54,12 @@ export const handlers = [
   http.post('/api/watchlist', () => HttpResponse.json({ ok: true })),
   http.delete('/api/watchlist', () => HttpResponse.json({ ok: true })),
 
+  http.get('/api/news', () => HttpResponse.json({
+    items: [], summary: [],
+    overall: { count: 0, avg_sentiment: null, positive: 0, negative: 0, neutral: 0 },
+  })),
+  http.post('/api/news/refresh', () => HttpResponse.json({ started: true })),
+
   http.get('/api/alerts', () => HttpResponse.json([])),
   http.post('/api/alerts', () => HttpResponse.json({ id: 1 })),
   http.put('/api/alerts/:id', () => HttpResponse.json({ ok: true })),

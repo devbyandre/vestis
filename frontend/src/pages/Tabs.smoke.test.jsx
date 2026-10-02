@@ -35,8 +35,8 @@ describe.each(cases)('%s', (_name, Component, heading) => {
 })
 
 describe('TabNews', () => {
-  it('renders its placeholder', () => {
+  it('renders its empty state', async () => {
     renderWithProviders(<TabNews />)
-    expect(screen.getByText(/Coming soon/i)).toBeInTheDocument()
+    expect(await screen.findByText(/No headlines in this period/i)).toBeInTheDocument()
   })
 })

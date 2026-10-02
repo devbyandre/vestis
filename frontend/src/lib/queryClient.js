@@ -37,6 +37,7 @@ export const qk = {
   dividends: (ids, year) => ['analytics', 'dividends', ids, year],
   indicators: (symbol, opts) => ['analytics', 'indicators', symbol, opts],
   watchlist: () => ['watchlist'],
+  news: (scope, days, symbol) => ['news', scope, days, symbol],
   alerts: () => ['alerts'],
   alertHistory: () => ['alerts', 'history'],
   kpis: (ids) => ['planning', 'kpis', ids],
