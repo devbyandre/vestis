@@ -290,6 +290,24 @@ def init_db():
         except Exception as exc:
             logging.warning(f"alerts.state migration skipped: {exc}")
 
+    # Migration (SQLite only): older fetches stored numpy int64 volumes as raw
+    # 8-byte blobs, which crash JSON encoding in the price endpoints.
+    if not is_postgres:
+        try:
+            with engine.begin() as conn:
+                rows = conn.execute(text(
+                    "SELECT security_id, date, volume FROM prices WHERE typeof(volume)='blob'"
+                )).fetchall()
+                for sid, d, blob in rows:
+                    conn.execute(
+                        text("UPDATE prices SET volume=:v WHERE security_id=:s AND date=:d"),
+                        {"v": float(int.from_bytes(bytes(blob), "little", signed=True)), "s": sid, "d": d},
+                    )
+                if rows:
+                    logging.info(f"Repaired {len(rows)} blob-typed price volumes")
+        except Exception as exc:
+            logging.warning(f"prices.volume repair skipped: {exc}")
+
     logging.info(f"Schema initialised on {dialect}: {ok} statements OK, {skipped} skipped.")
 
 
