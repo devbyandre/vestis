@@ -190,7 +190,8 @@ def apply_schema(conn):
             last_evaluated   TEXT,
             last_triggered   TEXT,
             note             TEXT,
-            auto_managed     INTEGER DEFAULT 0
+            auto_managed     INTEGER DEFAULT 0,
+            state            TEXT
         );
 
         CREATE TABLE IF NOT EXISTS alerts_log (

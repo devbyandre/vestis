@@ -83,6 +83,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-stockapp}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-stockapp}
     volumes:
       - ./config.json:/app/config.json:ro
+      # Shared with the api service: /data/config.json is where the Settings
+      # UI writes, so workers must see the same file.
+      - ./data:/data
     command: supercronic /app/cron/fetcher.cron
 
   # ─────────────────────────────────────────
@@ -101,8 +104,12 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-stockapp}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-stockapp}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      # Optional override for the "Open in Vestis" button; otherwise the
+      # vestis_url setting (Settings → Telegram) is used.
+      VESTIS_URL: ${VESTIS_URL:-}
     volumes:
       - ./config.json:/app/config.json:ro
+      - ./data:/data   # shared config with the api service (see data-fetcher)
     command: supercronic /app/cron/telegram.cron
 
   api:

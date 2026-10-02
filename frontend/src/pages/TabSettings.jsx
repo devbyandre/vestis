@@ -68,6 +68,8 @@ export default function TabSettings() {
           <Field label="Chat ID" value={form.telegram_chat_id || ''} onChange={set('telegram_chat_id')} password
             hint={form.telegram_chat_id_set ? '✓ Currently set' : 'Not configured'} />
         </div>
+        <Field label="Vestis URL" value={form.vestis_url || ''} onChange={set('vestis_url')}
+          hint='Adds an "Open in Vestis" button to alert messages, e.g. https://vestis.homeserver.local. Leave empty for no button.' />
         <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-300">
           <input type="checkbox" checked={!!form.dnd} onChange={e => set('dnd')(e.target.checked)}
             className="rounded border-surface-3 bg-surface-2" />

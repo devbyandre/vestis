@@ -83,6 +83,35 @@ def get_price_history(symbol: str, lookback_days: int = 400) -> pd.DataFrame:
     return df
 
 
+def get_price_bars(symbol: str, lookback_days: int = 400) -> pd.DataFrame:
+    """Raw daily bars as stored: trading days only, native currency.
+
+    Unlike get_price_series/get_price_history this does NOT forward-fill
+    weekends/holidays or convert to EUR. Technical signals (RSI, MA crosses,
+    % moves) must be computed on this — otherwise FX moves leak into the
+    indicator and window lengths silently cover fewer trading days.
+    Adds a 'price' column (adj_close, falling back to close).
+    """
+    start = (pd.Timestamp.utcnow().normalize() - pd.Timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    df = _read_sql("""
+        SELECT p.date, p.open, p.high, p.low, p.close, p.adj_close, p.volume
+        FROM prices p
+        JOIN securities s ON s.id = p.security_id
+        WHERE s.yahoo_ticker=? AND p.date >= ?
+        ORDER BY p.date
+    """, (symbol, start))
+    if df.empty:
+        return df
+    df["date"] = pd.to_datetime(df["date"])
+    for col in ["open", "high", "low", "close", "adj_close", "volume"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    # store_prices writes 0.0 for missing values — treat those as missing
+    adj = df["adj_close"].where(df["adj_close"] > 0)
+    close = df["close"].where(df["close"] > 0)
+    df["price"] = adj.combine_first(close)
+    return df.dropna(subset=["price"]).reset_index(drop=True)
+
+
 def store_prices(security_id: int, df: pd.DataFrame) -> None:
     if df is None or df.empty:
         return

@@ -10,6 +10,7 @@ import yfinance as yf
 
 import db_utils as db
 import middleware as mw
+from config_utils import get_config
 
 import sys
 import os
@@ -128,7 +129,7 @@ def fetch_prices_batch(
     throttler: Throttler,
     start_date: str = None,
     max_retries: int = 3,
-    price_update_hours: int = 24  # update only once per day
+    price_update_hours: float = None  # default: price_refresh_minutes config
 ) -> Dict[str, bool]:
     """
     Fetch daily adjusted prices for multiple tickers in a single request.
@@ -138,6 +139,10 @@ def fetch_prices_batch(
     results = {sym: False for sym in tickers}
     if not tickers:
         return results
+    if price_update_hours is None:
+        # Refresh on every cron run during market hours so alerts see today's
+        # bar, not one fetched up to 24h earlier.
+        price_update_hours = float(get_config("price_refresh_minutes") or 25) / 60.0
 
     # Determine which tickers actually need update
     tickers_to_fetch = []
@@ -147,7 +152,7 @@ def fetch_prices_batch(
         if should_update(last_price, price_update_hours):
             tickers_to_fetch.append(sym)
         else:
-            logging.info("Skipping %s, prices updated within last %d hours.", sym, price_update_hours)
+            logging.info("Skipping %s, prices updated within last %.1f hours.", sym, price_update_hours)
             results[sym] = True  # already up-to-date
 
     if not tickers_to_fetch:

@@ -15,7 +15,7 @@ def get_all_alerts(active_only: bool = True) -> pd.DataFrame:
                s.yahoo_ticker AS symbol,
                a.alert_type, a.params, a.active, a.notify_mode,
                a.cooldown_seconds, a.last_evaluated, a.last_triggered,
-               a.note, a.auto_managed
+               a.note, a.auto_managed, a.state
         FROM alerts a
         LEFT JOIN securities_cache sc ON sc.security_id = a.security_id
         LEFT JOIN securities s ON s.id = a.security_id
@@ -92,6 +92,17 @@ def log_alert_trigger(alert_id: int, payload: dict) -> None:
         cur.execute(
             _adapt_sql("UPDATE alerts SET last_triggered=?, last_evaluated=? WHERE id=?"),
             (now, now, alert_id),
+        )
+        conn.commit()
+
+
+def set_alert_state(alert_id: int, state: dict) -> None:
+    """Persist edge-trigger state for an alert (see middleware.alerts)."""
+    now = pd.Timestamp.utcnow().isoformat()
+    with get_conn() as conn:
+        conn.cursor().execute(
+            _adapt_sql("UPDATE alerts SET state=?, last_evaluated=? WHERE id=?"),
+            (json.dumps(state), now, int(alert_id)),
         )
         conn.commit()
 

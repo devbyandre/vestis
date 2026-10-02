@@ -408,52 +408,36 @@ def _alert(alert_type, params, symbol="AAPL"):
 
 class TestEvaluateAlert:
     """
-    evaluate_alert calls fetch_symbol_data internally, which hits the DB.
-    We monkeypatch fetch_symbol_data to return controlled data.
+    Technical alerts read native-currency trading-day bars via
+    middleware.alerts._bars; price/mos alerts read fetch_symbol_data (EUR).
+    Both are patched on the owning submodule (mw.alerts), since evaluate_alert
+    looks them up as module globals.
     """
 
-    def _eval(self, monkeypatch, alert, market_data: dict) -> bool:
-        # evaluate_alert calls fetch_symbol_data() as a same-module global
-        # lookup inside middleware/alerts.py — patching mw.fetch_symbol_data
-        # (the package-level re-export) wouldn't affect that lookup, since
-        # it's a separate name binding. Patch the owning submodule instead.
-        monkeypatch.setattr(mw.alerts, "fetch_symbol_data", lambda sym: market_data)
-        # Patch db.get_price_history to return synthetic data matching market_data
-        import db_utils as _db
-        sma_data = market_data.get("sma", {})
-        last_price = market_data.get("last_price", 100.0)
-        high_52w = market_data.get("52w_high", last_price)
-        low_52w = market_data.get("52w_low", last_price)
-        def _fake_ph(symbol, lookback_days=400):
-            n = 300
-            dates = pd.date_range(end=pd.Timestamp.utcnow(), periods=n, freq='D')
-            # Build prices that produce the requested SMA relationship
-            # For golden cross: fast > slow at end, fast <= slow one bar before
-            short_k = min(sma_data.keys()) if sma_data else 50
-            long_k = max(sma_data.keys()) if sma_data else 200
-            short_v = sma_data.get(short_k, last_price)
-            long_v = sma_data.get(long_k, last_price)
-            # Flat at long_v for most bars, jump to short_v at the very end
-            prices = [long_v] * (n - 2) + [long_v - 0.01] + [short_v]
-            df = pd.DataFrame({
-                "date": dates,
-                "adj_close": pd.Series(prices, dtype=float),
-                "close": pd.Series(prices, dtype=float),
-                "volume": [1000000] * n,
-            })
-            # Override last price to match test expectation
-            df.loc[df.index[-1], 'adj_close'] = last_price
-            df.loc[df.index[-1], 'close'] = last_price
-            # For 52w low test: ensure last bar equals the minimum
-            if last_price <= low_52w:
-                df['adj_close'] = df['adj_close'].clip(lower=last_price)
-                df.loc[df.index[-1], 'adj_close'] = last_price
-            return df
-        # mw.db is the fake stub — patch get_price_history on it directly
-        mw.db.get_price_history = _fake_ph
+    @staticmethod
+    def _bars_df(prices, volumes=None, end="2026-10-01"):
+        dates = pd.bdate_range(end=end, periods=len(prices))
+        return pd.DataFrame({
+            "date": dates,
+            "price": pd.Series(prices, dtype=float),
+            "volume": pd.Series(volumes if volumes is not None else [1_000_000] * len(prices), dtype=float),
+        })
+
+    def _eval(self, monkeypatch, alert, market_data=None, bars=None):
+        monkeypatch.setattr(mw.alerts, "fetch_symbol_data", lambda sym: market_data or {})
+        monkeypatch.setattr(mw.alerts, "_bars", lambda sym: bars if bars is not None else pd.DataFrame())
         return mw.evaluate_alert(alert)
 
-    # --- price alerts ---
+    def _run(self, monkeypatch, alert, series_list):
+        """Evaluate once per bars snapshot, carrying state like the worker does."""
+        fired = []
+        for bars in series_list:
+            hit = self._eval(monkeypatch, alert, bars=bars)
+            fired.append(hit)
+            alert["state"] = json.dumps(alert["_state"])
+        return fired
+
+    # --- price alerts (EUR, crossing) ---
     def test_price_above_triggers(self, monkeypatch):
         alert = _alert("price", {"threshold": 100.0, "mode": "absolute", "direction": "above"})
         assert self._eval(monkeypatch, alert, {"last_price": 110.0}) is True
@@ -470,57 +454,82 @@ class TestEvaluateAlert:
         alert = _alert("price", {"threshold": 50.0, "mode": "absolute", "direction": "below"})
         assert self._eval(monkeypatch, alert, {"last_price": 60.0}) is False
 
-    # --- RSI alerts ---
-    def test_rsi_overbought_triggers(self, monkeypatch):
+    def test_price_refires_after_crossing_back(self, monkeypatch):
+        # Regression: side used to be recorded only when firing, so a price
+        # alert could never fire a second time.
+        alert = _alert("price", {"threshold": 50.0, "mode": "absolute", "direction": "below"})
+        fired = []
+        for lp in (40.0, 41.0, 60.0, 45.0):
+            fired.append(self._eval(monkeypatch, alert, {"last_price": lp}))
+            alert["state"] = json.dumps(alert["_state"])
+        assert fired == [True, False, False, True]
+
+    # --- RSI (edge-triggered with re-arm gap) ---
+    def test_rsi_fires_once_then_rearms(self, monkeypatch):
         alert = _alert("rsi", {"threshold": 70, "direction": "above"})
-        assert self._eval(monkeypatch, alert, {"rsi": 75.0}) is True
+        up = list(np.linspace(100, 160, 60))                 # strong rally → RSI high
+        down = up + list(np.linspace(160, 130, 20))          # pullback → RSI low
+        again = down + list(np.linspace(130, 190, 40))       # new rally
+        fired = self._run(monkeypatch, alert, [
+            self._bars_df(up), self._bars_df(up + [160.5]),  # still overbought: no repeat
+            self._bars_df(down), self._bars_df(again),
+        ])
+        assert fired == [True, False, False, True]
 
     def test_rsi_oversold_triggers(self, monkeypatch):
         alert = _alert("rsi", {"threshold": 30, "direction": "below"})
-        assert self._eval(monkeypatch, alert, {"rsi": 25.0}) is True
+        assert self._eval(monkeypatch, alert, bars=self._bars_df(list(np.linspace(160, 100, 60)))) is True
 
     def test_rsi_no_trigger_when_neutral(self, monkeypatch):
         alert = _alert("rsi", {"threshold": 70, "direction": "above"})
-        assert self._eval(monkeypatch, alert, {"rsi": 55.0}) is False
+        flat = [100 + (1 if i % 2 else -1) for i in range(60)]
+        assert self._eval(monkeypatch, alert, bars=self._bars_df(flat)) is False
 
-    # --- MA crossover alerts ---
-    def test_golden_cross_triggers(self, monkeypatch):
-        alert = _alert("ma_crossover", {"short": 50, "long": 200, "direction": "golden"})
-        data = {"sma": {50: 205.0, 200: 200.0}}
-        assert self._eval(monkeypatch, alert, data) in (True, False)  # crossing needs real history
+    # --- MA crossover ---
+    def test_golden_cross_triggers_once(self, monkeypatch):
+        alert = _alert("ma_crossover", {"short": 5, "long": 20, "crossover_type": "golden"})
+        prices = list(np.linspace(120, 100, 40)) + list(np.linspace(100, 115, 6))
+        fired = self._run(monkeypatch, alert, [self._bars_df(prices), self._bars_df(prices + [116], end="2026-10-02")])
+        assert fired == [True, False]
 
-        alert = _alert("ma_crossover", {"short": 50, "long": 200, "direction": "death"})
-        data = {"sma": {50: 195.0, 200: 200.0}}
-        assert self._eval(monkeypatch, alert, data) in (True, False)
-
-    def test_golden_cross_no_trigger_when_below(self, monkeypatch):
-        alert = _alert("ma_crossover", {"short": 50, "long": 200, "direction": "golden"})
-        data = {"sma": {50: 190.0, 200: 200.0}}
-        assert self._eval(monkeypatch, alert, data) is False
+    def test_ma_hugging_does_not_flip(self, monkeypatch):
+        # MAs within the min spread band must not produce crosses
+        alert = _alert("ma_crossover", {"short": 5, "long": 20, "crossover_type": "golden"})
+        prices = [100 + 0.05 * (1 if i % 3 else -1) for i in range(60)]
+        assert self._eval(monkeypatch, alert, bars=self._bars_df(prices)) is False
 
     # --- 52-week high/low ---
     def test_52w_high_triggers(self, monkeypatch):
         alert = _alert("52w", {"type": "high"})
-        assert self._eval(monkeypatch, alert, {"last_price": 200.0, "52w_high": 200.0}) is True
+        assert self._eval(monkeypatch, alert, bars=self._bars_df([100.0] * 260 + [120.0])) is True
 
     def test_52w_low_triggers(self, monkeypatch):
         alert = _alert("52w", {"type": "low"})
-        assert self._eval(monkeypatch, alert, {"last_price": 100.0, "52w_low": 100.0}) is True
+        assert self._eval(monkeypatch, alert, bars=self._bars_df([100.0] * 260 + [80.0])) is True
 
     def test_52w_high_no_trigger_below_high(self, monkeypatch):
         alert = _alert("52w", {"type": "high"})
-        assert self._eval(monkeypatch, alert, {"last_price": 190.0, "52w_high": 200.0}) in (True, False)
+        assert self._eval(monkeypatch, alert, bars=self._bars_df([100.0] * 100 + [200.0] + [100.0] * 100 + [190.0])) is False
 
     # --- Volume spike ---
     def test_volume_spike_triggers(self, monkeypatch):
         alert = _alert("volume_spike", {"multiplier": 2.0, "lookback": 20})
-        data = {"volume": 2_000_000, "avg_volume": {20: 800_000}}
-        assert self._eval(monkeypatch, alert, data) is True
+        bars = self._bars_df([100.0] * 30, volumes=[800_000] * 29 + [2_000_000])
+        assert self._eval(monkeypatch, alert, bars=bars) is True
 
     def test_volume_spike_no_trigger_below_mult(self, monkeypatch):
         alert = _alert("volume_spike", {"multiplier": 3.0, "lookback": 20})
-        data = {"volume": 1_500_000, "avg_volume": {20: 1_000_000}}
-        assert self._eval(monkeypatch, alert, data) is False
+        bars = self._bars_df([100.0] * 30, volumes=[1_000_000] * 29 + [1_500_000])
+        assert self._eval(monkeypatch, alert, bars=bars) is False
+
+    # --- % move ---
+    def test_pct_drop_fires_once_per_trading_day(self, monkeypatch):
+        alert = _alert("pct_change", {"pct": 5, "days": 1, "direction": "down"})
+        day1 = self._bars_df([100.0] * 10 + [94.0], end="2026-10-01")
+        day2 = self._bars_df([100.0] * 9 + [94.0, 88.0], end="2026-10-02")
+        fired = self._run(monkeypatch, alert, [day1, day1, day1, day2])
+        assert fired == [True, False, False, True]
+        assert "-6.0%" in alert["_detail"] or "-6.4%" in alert["_detail"]
 
     # --- Edge cases ---
     def test_empty_data_returns_false(self, monkeypatch):
@@ -529,7 +538,52 @@ class TestEvaluateAlert:
 
     def test_unknown_alert_type_returns_false(self, monkeypatch):
         alert = _alert("nonexistent_type", {})
-        assert self._eval(monkeypatch, alert, {"last_price": 100.0}) is False
+        assert self._eval(monkeypatch, alert, bars=self._bars_df([100.0] * 10)) is False
+
+
+class TestAlertRegression20261001:
+    """
+    Replays the real market data behind the 2026-10-01 alerts (see
+    tests/fixtures). Before the fix, TSM fired "RSI overbought" every 4h
+    (RSI computed on EUR-converted, weekend-filled prices: 74.8 vs 66.1 in
+    USD) and Visa fired a golden cross while its 20/50 SMAs were 0.04%
+    apart. Bayer's -5.3% drop was real and must still fire — once.
+    """
+
+    FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "alert_regression_2026-10-01.csv")
+
+    def _bars(self, symbol, upto):
+        df = pd.read_csv(self.FIXTURE, parse_dates=["date"])
+        df = df[(df["symbol"] == symbol) & (df["date"] <= upto)]
+        return df.rename(columns={"close": "price"}).reset_index(drop=True)
+
+    def _replay(self, monkeypatch, symbol, alert, days):
+        monkeypatch.setattr(mw.alerts, "fetch_symbol_data", lambda sym: {})
+        fired = []
+        for day in days:
+            bars = self._bars(symbol, day)
+            monkeypatch.setattr(mw.alerts, "_bars", lambda sym, b=bars: b)
+            for _run in range(3):  # several worker runs per day
+                fired.append((day, mw.evaluate_alert(alert)))
+                alert["state"] = json.dumps(alert["_state"])
+        return [d for d, hit in fired if hit]
+
+    def test_tsm_rsi_not_overbought_in_usd(self, monkeypatch):
+        alert = _alert("rsi", {"threshold": 70, "direction": "above"}, symbol="TSM")
+        assert self._replay(monkeypatch, "TSM", alert,
+                            ["2026-09-28", "2026-09-29", "2026-09-30", "2026-10-01"]) == []
+        assert "66.1" in alert["_detail"]
+
+    def test_visa_no_golden_cross(self, monkeypatch):
+        alert = _alert("ma_crossover", {"short": 20, "long": 50, "crossover_type": "golden"}, symbol="V")
+        assert self._replay(monkeypatch, "V", alert,
+                            ["2026-09-29", "2026-09-30", "2026-10-01"]) == []
+
+    def test_bayer_drop_fires_exactly_once(self, monkeypatch):
+        alert = _alert("pct_change", {"pct": 5, "days": 1, "direction": "down"}, symbol="BAYN.DE")
+        assert self._replay(monkeypatch, "BAYN.DE", alert,
+                            ["2026-09-30", "2026-10-01"]) == ["2026-10-01"]
+        assert "-5.3%" in alert["_detail"]
 
 
 # ═════════════════════════════════════════════════════════════════════════════

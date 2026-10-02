@@ -29,6 +29,7 @@ DEFAULT = {
     "db_path": os.path.expanduser("portfolio.db"),
     "telegram_bot_token": "",
     "telegram_chat_id": "",
+    "vestis_url": "",
     "tax_rate": 0.25,
     "valuation_cache_hours": 24,
     "kpi_cache_hours": 24,
@@ -36,6 +37,7 @@ DEFAULT = {
     "yf_base_sleep_sec": 0.8,
     "news_max_items": 50,
     "news_min_fetch_minutes": 30,
+    "price_refresh_minutes": 25,
     "dcf_projection_years": 10,
     "dcf_discount_rate": 0.10,
     "dcf_terminal_growth": 0.025,
@@ -155,6 +157,7 @@ class _ConfigSingleton:
         return cls._instance
 
     def _load_config(self) -> None:
+        self._mtime = os.path.getmtime(CONFIG_PATH) if os.path.exists(CONFIG_PATH) else None
         if os.path.exists(CONFIG_PATH):
             try:
                 with open(CONFIG_PATH, "r", encoding="utf-8") as fh:
@@ -168,18 +171,29 @@ class _ConfigSingleton:
         for k, v in DEFAULT.items():
             self._config.setdefault(k, v)
 
+    def _refresh(self) -> None:
+        # Several processes share this file (API workers, telegram worker,
+        # fetcher) — pick up their writes instead of serving a stale copy.
+        mtime = os.path.getmtime(CONFIG_PATH) if os.path.exists(CONFIG_PATH) else None
+        if mtime != self._mtime:
+            self._load_config()
+
     def save(self) -> None:
         with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
             json.dump(self._config, fh, indent=2)
+        self._mtime = os.path.getmtime(CONFIG_PATH)
 
     def get(self, key: str) -> Any:
+        self._refresh()
         return self._config.get(key)
 
     def set(self, key: str, value: Any) -> None:
+        self._refresh()
         self._config[key] = value
         self.save()
 
     def all(self) -> Dict[str, Any]:
+        self._refresh()
         return dict(self._config)
 
 

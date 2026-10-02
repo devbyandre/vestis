@@ -72,6 +72,7 @@ from .prices import (
     get_latest_price,
     get_price_series,
     get_price_history,
+    get_price_bars,
     store_prices,
 )
 
@@ -97,6 +98,7 @@ from .alerts import (
     toggle_alert_active,
     delete_alert,
     log_alert_trigger,
+    set_alert_state,
     get_last_alert_log,
     last_trigger_time,
     get_active_alerts,

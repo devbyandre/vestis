@@ -207,7 +207,8 @@ DDL_STATEMENTS = [
         last_evaluated   TEXT,
         last_triggered   TEXT,
         note             TEXT,
-        auto_managed     INTEGER DEFAULT 0
+        auto_managed     INTEGER DEFAULT 0,
+        state            TEXT
     )""",
 
     """CREATE TABLE IF NOT EXISTS alerts_log (
@@ -275,6 +276,19 @@ def init_db():
                     ))
                 except Exception as exc:
                     logging.warning(f"Column widen skipped for {col}: {exc}")
+
+    # Migration: alerts.state holds per-alert edge-trigger state (last side,
+    # armed flag, last fired bar) so alerts fire on transitions, not levels.
+    with engine.begin() as conn:
+        try:
+            if is_postgres:
+                conn.execute(text("ALTER TABLE alerts ADD COLUMN IF NOT EXISTS state TEXT"))
+            else:
+                cols = [r[1] for r in conn.execute(text("PRAGMA table_info(alerts)"))]
+                if "state" not in cols:
+                    conn.execute(text("ALTER TABLE alerts ADD COLUMN state TEXT"))
+        except Exception as exc:
+            logging.warning(f"alerts.state migration skipped: {exc}")
 
     logging.info(f"Schema initialised on {dialect}: {ok} statements OK, {skipped} skipped.")
 

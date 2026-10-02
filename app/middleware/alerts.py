@@ -243,22 +243,98 @@ def fetch_symbol_data(symbol: str) -> dict:
 
 
 
+# ── Alert evaluation ────────────────────────────────────────────────────────
+#
+# Every alert is edge-triggered: it fires when a condition *starts* (a cross,
+# a new move on a new trading day), not on every run while the condition
+# holds. Per-alert state lives in alerts.state (JSON) and is returned to the
+# caller as alert["_state"] for persisting; alert["_detail"] carries the
+# actual values that triggered it, for the notification text.
+#
+# Technical signals (RSI, MA cross, % move, 52w, volume) are computed on raw
+# trading-day bars in the security's native currency (db.get_price_bars).
+# Price-threshold alerts stay on the EUR series, since thresholds like
+# trailing stops and buy-price recovery are set in EUR.
+
+_BARS_CACHE: Dict[str, tuple] = {}
+_BARS_TTL_SEC = 120
+
+
+def _bars(symbol: str) -> pd.DataFrame:
+    """Native-currency trading-day bars, cached briefly so one worker run
+    reads each symbol once no matter how many alerts it has."""
+    now = pd.Timestamp.utcnow()
+    hit = _BARS_CACHE.get(symbol)
+    if hit and (now - hit[0]).total_seconds() < _BARS_TTL_SEC:
+        return hit[1]
+    df = db.get_price_bars(symbol, lookback_days=550)
+    if df is None:
+        df = pd.DataFrame()
+    _BARS_CACHE[symbol] = (now, df)
+    return df
+
+
+def _load_state(alert: dict) -> dict:
+    raw = alert.get("state")
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, str) and raw.strip():
+        try:
+            v = json.loads(raw)
+            return v if isinstance(v, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _currency(alert: dict) -> str:
+    try:
+        cache = db.get_security_cache(alert.get("security_id")) or {}
+        return str(cache.get("currency") or "")
+    except Exception:
+        return ""
+
+
+def _hysteresis_regimes(spread: pd.Series, band: float) -> List[Optional[str]]:
+    """'above'/'below' regime per bar; only changes once spread clears ±band,
+    so MAs hugging each other don't flip the regime back and forth."""
+    out, reg = [], None
+    for v in spread:
+        if pd.notna(v):
+            if v >= band:
+                reg = "above"
+            elif v <= -band:
+                reg = "below"
+        out.append(reg)
+    return out
+
+
 def evaluate_alert(alert: dict) -> bool:
     symbol = alert["symbol"]
     a_type = alert["alert_type"]
     params = json.loads(alert.get("params") or "{}")
+    state = _load_state(alert)
+    new_state = dict(state)
+    detail = ""
+    result = False
 
     try:
-        data = fetch_symbol_data(symbol)
-        if not data:
-            logging.info("evaluate_alert: %s (%s) — skipped (no data)", symbol, a_type)
-            return False
+        if a_type in ("price", "mos"):
+            data = fetch_symbol_data(symbol)
+            if not data:
+                logging.info("evaluate_alert: %s (%s) — skipped (no data)", symbol, a_type)
+                return False
+        else:
+            bars = _bars(symbol)
+            if bars.empty:
+                logging.info("evaluate_alert: %s (%s) — skipped (no bars)", symbol, a_type)
+                return False
+            price = bars["price"].reset_index(drop=True)
+            bar_dates = bars["date"].dt.strftime("%Y-%m-%d").reset_index(drop=True)
+            last_bar = bar_dates.iloc[-1]
+            ccy = _currency(alert)
 
-        result = False
-
-        # Price alert — crossing detection only
-        # Fires once when price crosses the threshold, not continuously while below/above.
-        # Stores the last "side" in the alert log to detect transitions.
+        # Price threshold — fires on the transition to the alert side.
         if a_type == "price":
             lp = data.get("last_price")
             if lp is not None:
@@ -267,152 +343,141 @@ def evaluate_alert(alert: dict) -> bool:
                 direction = params.get("direction", "above")
                 target = threshold if mode == "absolute" else lp * (1 + threshold)
                 curr_side = "above" if lp > target else "below"
-                # Get last recorded side from alert log
-                last_log = db.get_last_alert_log(alert.get("id"))
-                prev_side = (last_log.get("side") if last_log else None)
-                # Fire only on transition to the alert direction
-                if curr_side == direction and prev_side != direction:
-                    result = True
-                # Always update side so next run knows where we are
+                prev_side = state.get("side")
+                if prev_side is None:
+                    # Alerts from before alerts.state existed kept their side in the log
+                    last_log = db.get_last_alert_log(alert.get("id"))
+                    prev_side = last_log.get("side") if last_log else None
+                result = curr_side == direction and prev_side != direction
+                new_state["side"] = curr_side
                 alert["_curr_side"] = curr_side
+                detail = f"price €{lp:.2f} vs threshold €{target:.2f}"
 
+        # RSI — fires on entering the zone, re-arms after leaving it by `rearm_gap`.
         elif a_type == "rsi":
-            rsi_val = data.get("rsi")
-            if rsi_val is not None:
+            if len(price) >= 30:
+                rsi_val = float(rsi(price, window=14).iloc[-1])
                 thr = float(params.get("threshold", 70))
+                gap = float(params.get("rearm_gap", 5))
                 direction = params.get("direction", "above")
-                result = (direction == "above" and rsi_val > thr) or \
-                         (direction == "below" and rsi_val < thr)
+                if direction == "above":
+                    in_zone, rearm = rsi_val > thr, rsi_val < thr - gap
+                else:
+                    in_zone, rearm = rsi_val < thr, rsi_val > thr + gap
+                armed = state.get("armed", True)
+                if armed and in_zone:
+                    result, armed = True, False
+                elif not armed and rearm:
+                    armed = True
+                new_state["armed"] = armed
+                detail = f"RSI(14) {rsi_val:.1f} (threshold {thr:g})"
 
+        # MA crossover — regime change with a min spread, each cross reported once.
         elif a_type == "ma_crossover":
-            # Only fire if the cross happened within the last `lookback` bars
-            # (not just that fast MA is currently above slow MA — that would fire forever)
             short = int(params.get("short", 50))
             long_ = int(params.get("long", 200))
             crossover_type = params.get("crossover_type", params.get("direction", "golden"))
             lookback = int(params.get("lookback_bars", 3))
-            try:
-                prices = db.get_price_history(symbol, lookback_days=400)
-                if prices is not None and not prices.empty and len(prices) > long_ + lookback:
-                    if 'adj_close' in prices.columns:
-                        adj = pd.to_numeric(prices['adj_close'], errors='coerce').ffill().bfill()
-                    else:
-                        adj = pd.to_numeric(prices['close'], errors='coerce').ffill().bfill()
-                    fast = adj.rolling(short).mean()
-                    slow = adj.rolling(long_).mean()
-                    # Check if cross occurred in the last `lookback` bars
-                    for i in range(-lookback, 0):
-                        prev_fast = fast.iloc[i - 1]
-                        prev_slow = slow.iloc[i - 1]
-                        curr_fast = fast.iloc[i]
-                        curr_slow = slow.iloc[i]
-                        if pd.isna(prev_fast) or pd.isna(prev_slow):
-                            continue
-                        if crossover_type == "golden" and prev_fast <= prev_slow and curr_fast > curr_slow:
-                            result = True
-                            break
-                        if crossover_type == "death" and prev_fast >= prev_slow and curr_fast < curr_slow:
-                            result = True
-                            break
-            except Exception:
-                logging.exception("evaluate_alert: ma_crossover failed for %s", symbol)
+            band = float(params.get("min_spread_pct", 0.5)) / 100.0
+            if len(price) > long_ + lookback:
+                fast = price.rolling(short).mean()
+                slow = price.rolling(long_).mean()
+                spread = fast / slow - 1
+                regimes = _hysteresis_regimes(spread, band)
+                want, other = ("above", "below") if crossover_type == "golden" else ("below", "above")
+                event = None
+                for i in range(len(regimes) - lookback, len(regimes)):
+                    if regimes[i] == want and regimes[i - 1] == other:
+                        event = bar_dates.iloc[i]
+                if event and state.get("last_event") != event:
+                    result = True
+                    new_state["last_event"] = event
+                detail = (f"SMA{short} {fast.iloc[-1]:.2f} vs SMA{long_} {slow.iloc[-1]:.2f} {ccy}"
+                          f" (spread {spread.iloc[-1] * 100:+.2f}%)").replace("  ", " ")
 
+        # 52-week high/low — once per new extreme bar.
         elif a_type == "52w":
-            # Only fire if the 52w high/low was broken in the last `lookback` bars
             typ = params.get("type", "high")
-            lookback = int(params.get("lookback_bars", 3))
-            try:
-                prices = db.get_price_history(symbol, lookback_days=400)
-                if prices is not None and not prices.empty and len(prices) > lookback + 1:
-                    if 'adj_close' in prices.columns:
-                        adj = pd.to_numeric(prices['adj_close'], errors='coerce').ffill().bfill()
-                    else:
-                        adj = pd.to_numeric(prices['close'], errors='coerce').ffill().bfill()
-                    cutoff = pd.Timestamp.utcnow().replace(tzinfo=None) - pd.Timedelta(days=365)
-                    prices_copy = prices.copy()
-                    prices_copy['date'] = pd.to_datetime(prices_copy['date'], errors='coerce').apply(
-                        lambda t: t.replace(tzinfo=None) if pd.notna(t) else pd.NaT)
-                    for i in range(-lookback, 0):
-                        curr_price = adj.iloc[i]
-                        # compute 52w high/low up to bar i-1 (not including current bar)
-                        hist = adj.iloc[:len(adj)+i]
-                        hist_dates = prices_copy['date'].iloc[:len(adj)+i]
-                        hist_52w = hist[hist_dates >= cutoff]
-                        if hist_52w.empty:
-                            continue
-                        if typ == "high" and curr_price >= hist_52w.max():
-                            result = True
-                            break
-                        elif typ == "low" and curr_price <= hist_52w.min():
-                            result = True
-                            break
-            except Exception:
-                logging.exception("evaluate_alert: 52w failed for %s", symbol)
+            window = price.iloc[-253:-1]  # prior ~52 weeks of trading days
+            if len(window) >= 50:
+                curr = float(price.iloc[-1])
+                hit = curr >= window.max() if typ == "high" else curr <= window.min()
+                if hit and state.get("last_event") != last_bar:
+                    result = True
+                    new_state["last_event"] = last_bar
+                ref = window.max() if typ == "high" else window.min()
+                detail = f"{curr:.2f} {ccy} vs prior 52w {typ} {ref:.2f}".replace("  ", " ")
 
+        # Volume spike — latest bar vs average of the preceding bars, once per bar.
         elif a_type == "volume_spike":
             mult = float(params.get("multiplier", 2.0))
             look = int(params.get("lookback", 20))
-            vol = data.get("volume")
-            avg = data.get("avg_volume", {}).get(look)
-            if vol is not None and avg is not None and avg > 0:
-                result = vol >= mult * avg
+            vol = bars["volume"].reset_index(drop=True)
+            if len(vol) > look:
+                avg = float(vol.iloc[-1 - look:-1].mean())
+                curr = float(vol.iloc[-1])
+                if avg > 0 and curr >= mult * avg and state.get("last_event") != last_bar:
+                    result = True
+                    new_state["last_event"] = last_bar
+                if avg > 0:
+                    detail = f"volume {curr / avg:.1f}× the {look}-day average"
 
+        # % move over `days` trading days — once per trading day.
         elif a_type == "pct_change":
-            # Fire when price has changed by more than pct% within the last `days` calendar days
-            # e.g. {"pct": 5, "days": 1, "direction": "down"} = dropped >5% in last 24h
             pct = float(params.get("pct", 5)) / 100.0
             days = int(params.get("days", 1))
             direction = params.get("direction", "down")
-            try:
-                prices = db.get_price_history(symbol, lookback_days=days + 5)
-                if prices is not None and not prices.empty:
-                    if 'adj_close' in prices.columns:
-                        adj = pd.to_numeric(prices['adj_close'], errors='coerce').ffill()
-                    else:
-                        adj = pd.to_numeric(prices['close'], errors='coerce').ffill()
-                    prices_copy = prices.copy()
-                    prices_copy['date'] = pd.to_datetime(prices_copy['date'], errors='coerce').apply(
-                        lambda t: t.replace(tzinfo=None) if pd.notna(t) else pd.NaT)
-                    cutoff = pd.Timestamp.utcnow().replace(tzinfo=None) - pd.Timedelta(days=days)
-                    past = adj[prices_copy['date'] <= cutoff]
-                    if not past.empty:
-                        ref_price = float(past.iloc[-1])
-                        curr_price = float(adj.iloc[-1])
-                        change = (curr_price - ref_price) / ref_price
-                        if direction == "down":
-                            result = change <= -pct
-                        else:
-                            result = change >= pct
-            except Exception:
-                logging.exception("evaluate_alert: pct_change failed for %s", symbol)
+            if len(price) > days:
+                curr = float(price.iloc[-1])
+                ref = float(price.iloc[-1 - days])
+                change = (curr - ref) / ref
+                hit = change <= -pct if direction == "down" else change >= pct
+                if hit and state.get("last_event") != last_bar:
+                    result = True
+                    new_state["last_event"] = last_bar
+                detail = (f"{change * 100:+.1f}% ({ref:.2f} → {curr:.2f} {ccy}, "
+                          f"bar {last_bar})").replace(" ,", ",")
 
+        # Earnings within `days` — once per earnings date.
         elif a_type == "earnings_soon":
-            # Fire when earnings date is within `days` calendar days
             days = int(params.get("days", 3))
-            try:
-                cache = db.get_security_cache(alert.get("security_id"))
-                if cache is not None:
-                    ts = cache.get("earningsTimestamp")
-                    if ts:
-                        earnings_dt = pd.Timestamp(ts).replace(tzinfo=None)
-                        now = pd.Timestamp.utcnow().replace(tzinfo=None)
-                        diff = (earnings_dt - now).days
-                        result = 0 <= diff <= days
-            except Exception:
-                logging.exception("evaluate_alert: earnings_soon failed for %s", symbol)
+            cache = db.get_security_cache(alert.get("security_id"))
+            ts = cache.get("earningsTimestamp") if cache else None
+            if ts:
+                earnings_dt = pd.Timestamp(ts).replace(tzinfo=None)
+                now = pd.Timestamp.utcnow().replace(tzinfo=None)
+                diff = (earnings_dt - now).days
+                event = earnings_dt.strftime("%Y-%m-%d")
+                if 0 <= diff <= days and state.get("last_event") != event:
+                    result = True
+                    new_state["last_event"] = event
+                detail = f"earnings on {event}"
 
+        # Margin of safety — fires on reaching the threshold, re-arms 5pp below it.
         elif a_type == "mos":
             mos_val = data.get("mos")
             thr = float(params.get("threshold_pct", 0.25))
             if mos_val is not None:
-                result = mos_val >= thr
+                armed = state.get("armed", True)
+                if armed and mos_val >= thr:
+                    result, armed = True, False
+                elif not armed and mos_val < thr - 0.05:
+                    armed = True
+                new_state["armed"] = armed
+                detail = f"margin of safety {mos_val * 100:.0f}%"
 
-        # TODO: dividend/earnings alerts can be added with event calendar logic
-
-        logging.info("evaluate_alert: %s (%s) => %s [params=%s]",
-                     symbol, a_type, result, params)
+        alert["_state"] = new_state
+        alert["_detail"] = detail
+        logging.info("evaluate_alert: %s (%s) => %s [%s] [params=%s]",
+                     symbol, a_type, result, detail, params)
         return result
 
     except Exception:
         logging.exception("evaluate_alert: error for %s (%s)", symbol, a_type)
         return False
+
+
+def save_alert_state(alert: dict) -> None:
+    """Persist the state evaluate_alert computed (no-op if it didn't run)."""
+    if alert.get("id") is not None and alert.get("_state") is not None:
+        db.set_alert_state(int(alert["id"]), alert["_state"])

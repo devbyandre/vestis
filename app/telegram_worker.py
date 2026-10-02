@@ -20,8 +20,14 @@ def _md(text: str) -> str:
 def _get_creds(cli_token=None, cli_chat=None):
     return tg.get_creds(cli_token, cli_chat)
 
-def send_telegram(token: str, chat_id: str, text: str, max_retries: int = 3) -> bool:
-    return tg.send_message(token, chat_id, text, max_retries=max_retries)
+def send_telegram(token: str, chat_id: str, text: str, max_retries: int = 3,
+                  link: tuple | None = None) -> bool:
+    return tg.send_message(token, chat_id, text, max_retries=max_retries, link=link)
+
+def _vestis_link(label: str = "🔎 Open in Vestis") -> tuple | None:
+    """(label, url) for the 'open Vestis' button, or None if no URL is configured."""
+    url = tg.get_vestis_url()
+    return (label, url) if url else None
 
 def _describe_alert(alert_type: str, params) -> str:
     try:
@@ -44,9 +50,9 @@ def _describe_alert(alert_type: str, params) -> str:
         days = p.get("days", 1)
         direction = p.get("direction", "down")
         icon = "📉" if direction == "down" else "📈"
-        period = f"{days}d" if int(days) > 1 else "24h"
+        period = f"over {days} trading days" if int(days) > 1 else "vs previous close"
         verb = "drop" if direction == "down" else "rise"
-        return f"{icon} Sudden {verb} >{pct}% in last {period}"
+        return f"{icon} Sudden {verb} >{pct}% {period}"
     if alert_type == "earnings_soon":
         days = p.get("days", 3)
         return f"📅 Earnings in ≤{days} days"
@@ -63,8 +69,8 @@ def _describe_alert(alert_type: str, params) -> str:
         os_ = p.get("underbought", 30)
         return f"RSI zone crossed (overbought >{ob} / oversold <{os_})"
     if alert_type in ("ma_crossover", "golden_cross", "death_cross"):
-        short = p.get("short", 20)
-        long_ = p.get("long", 50)
+        short = p.get("short", 50)
+        long_ = p.get("long", 200)
         ct = p.get("crossover_type", "golden")
         icon = "☀️" if ct == "golden" else "💀"
         return f"{icon} {ct.capitalize()} cross ({short}/{long_} MA)"
@@ -98,40 +104,54 @@ def run_immediate(cli_token=None, cli_chat=None):
     alerts_df['symbol'] = alerts_df.get('symbol_sec', alerts_df.get('symbol_alert', '??')).fillna('??')
     alerts_df['name']   = alerts_df.get('name', pd.Series(dtype=str)).fillna('')
     now = pd.Timestamp.utcnow().replace(tzinfo=None)
-    fired_count = 0
+    fired_count = digest_count = 0
     for symbol, group in alerts_df.groupby('symbol'):
         sec_name = group['name'].iloc[0]
         fired_lines = []
         for alert in group.to_dict(orient='records'):
             alert_id = alert['id']
             notify_mode = alert.get('notify_mode') or 'immediate'
-            if notify_mode.startswith('digest'):
-                continue
-            # split_pending alerts repeat every 24h until user records the split
             alert_type_val = alert.get('alert_type', '')
+            # split_pending alerts repeat every 24h until user records the split
             if alert_type_val == 'split_pending':
                 cooldown = 86400  # remind once per day
             else:
                 cooldown = int(alert.get('cooldown_seconds') or 14400)
             last_trigger = mw.last_trigger(alert_id)
-            if last_trigger and (now - last_trigger.replace(tzinfo=None)).total_seconds() < cooldown:
-                logging.debug("Alert %s on cooldown", alert_id)
-                continue
+            on_cooldown = bool(last_trigger) and \
+                (now - last_trigger.replace(tzinfo=None)).total_seconds() < cooldown
             # split_pending alerts are always triggered (fire until split is recorded)
-            if alert.get('alert_type') == 'split_pending':
+            if alert_type_val == 'split_pending':
+                if on_cooldown:
+                    continue
                 triggered = True
             else:
+                # Evaluate even on cooldown so edge state (side / armed / last
+                # bar) keeps tracking the market between notifications.
                 try:
                     triggered = mw.evaluate_alert(alert)
                 except Exception:
                     logging.exception("Error evaluating alert %s", alert_id)
                     continue
                 if not triggered:
+                    mw.save_alert_state(alert)
                     continue
-            description = _describe_alert(alert.get('alert_type', ''), alert.get('params', ''))
+                if on_cooldown:
+                    # Keep the old state so this edge is still seen once the cooldown ends
+                    logging.debug("Alert %s triggered but on cooldown", alert_id)
+                    continue
+            if notify_mode.startswith('digest'):
+                # Logged now, reported by send_digest() for this notify_mode
+                mw.log_trigger(alert_id, _log_payload(alert, notify_mode))
+                mw.save_alert_state(alert)
+                digest_count += 1
+                continue
+            description = _describe_alert(alert_type_val, alert.get('params', ''))
             line = f"  • {description}"
+            if alert.get('_detail'):
+                line += f"\n      {_md(alert['_detail'])}"
             if alert.get('note'):
-                line += f" — {alert['note']}"
+                line += f"\n      _{_md(alert['note'])}_"
             fired_lines.append((alert_id, line, alert))
         if not fired_lines:
             continue
@@ -141,14 +161,21 @@ def run_immediate(cli_token=None, cli_chat=None):
         header = f"⚡ *Alert* — {label}"
         body = "\n".join([header] + [l for _, l, _ in fired_lines])
         body += f"\n\n_{now.strftime('%Y-%m-%d %H:%M UTC')}_"
-        if send_telegram(token, chat, body):
+        if send_telegram(token, chat, body, link=_vestis_link()):
             for alert_id, _, al in fired_lines:
-                payload = {"note": "immediate"}
-                if al.get("_curr_side"):
-                    payload["side"] = al["_curr_side"]
-                mw.log_trigger(alert_id, payload)
+                mw.log_trigger(alert_id, _log_payload(al, "immediate"))
+                mw.save_alert_state(al)
             fired_count += len(fired_lines)
-    logging.info("Immediate run complete — %d alerts fired", fired_count)
+    logging.info("Immediate run complete — %d alerts sent, %d logged for digest",
+                 fired_count, digest_count)
+
+def _log_payload(alert: dict, note: str) -> dict:
+    payload = {"note": note}
+    if alert.get("_curr_side"):
+        payload["side"] = alert["_curr_side"]
+    if alert.get("_detail"):
+        payload["detail"] = alert["_detail"]
+    return payload
 
 def send_digest(cli_token=None, cli_chat=None, freq="daily"):
     token, chat = _get_creds(cli_token, cli_chat)
@@ -292,8 +319,14 @@ def send_digest(cli_token=None, cli_chat=None, freq="daily"):
                 desc = _describe_alert(r.get('alert_type', ''), r.get('params', '{}'))
                 ts   = str(r.get('triggered_at', ''))[:16].replace('T', ' ')
                 line = f"  • *{_md(sym)}* — {desc}"
+                try:
+                    detail = json.loads(r.get('payload') or '{}').get('detail')
+                except Exception:
+                    detail = None
+                if detail:
+                    line += f" ({_md(detail)})"
                 if r.get('note'):
-                    line += f" — {r['note']}"
+                    line += f" — {_md(r['note'])}"
                 if ts:
                     line += f" ({ts})"
                 parts.append(line)
@@ -306,7 +339,7 @@ def send_digest(cli_token=None, cli_chat=None, freq="daily"):
 
     parts.append(f"_Generated {now.strftime('%Y-%m-%d %H:%M UTC')}_")
     body = "\n".join(parts)
-    if send_telegram(token, chat, body):
+    if send_telegram(token, chat, body, link=_vestis_link()):
         set_config(key, now.isoformat())
         logging.info("Digest (%s) sent", freq)
 
@@ -345,11 +378,21 @@ def maintain_alerts():
     # Deactivate automatic alerts for securities no longer held — otherwise
     # a price/trailing-stop alert created while a position was open keeps
     # firing forever after it's fully sold, since nothing else clears it.
+    # Watchlist golden-cross alerts are the exception: they're for securities
+    # NOT held, so excluding them here keeps them from being deactivated and
+    # recreated (with fresh history, so no cooldown) on every run.
     try:
         held_ids = set(int(x) for x in holdings['security_id']) if not holdings.empty else set()
+        watch_ids = set()
+        for symbol in mw.get_watchlist_symbols():
+            sec = mw.get_security(symbol)
+            if sec:
+                watch_ids.add(int(sec['id']))
         stale = mw.get_automatic_alerts()
         if not stale.empty:
-            stale = stale[~stale['security_id'].astype(int).isin(held_ids)]
+            sec_ids = stale['security_id'].astype(int)
+            watch_alert = (stale['alert_type'] == 'ma_crossover') & sec_ids.isin(watch_ids)
+            stale = stale[~sec_ids.isin(held_ids) & ~watch_alert]
             for _, alert in stale.iterrows():
                 mw.toggle_alert(int(alert['id']), False)
                 logging.info("Deactivated stale automatic alert %s for security_id=%s (no longer held)",

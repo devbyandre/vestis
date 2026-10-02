@@ -18,10 +18,14 @@ logger = logging.getLogger(__name__)
 
 
 def md_escape(text) -> str:
-    """Escape Markdown special characters for Telegram."""
+    """Escape text for Telegram's legacy Markdown parse_mode (what we send).
+
+    Legacy Markdown only treats _ * ` [ as special; escaping anything else
+    (MarkdownV2-style) leaves visible backslashes, e.g. "Visa Inc\\.".
+    """
     if not isinstance(text, str):
         text = str(text)
-    return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', text)
+    return re.sub(r'([_*`\[])', r'\\\1', text)
 
 
 def get_creds(cli_token=None, cli_chat=None):
@@ -31,14 +35,29 @@ def get_creds(cli_token=None, cli_chat=None):
     return token, chat
 
 
+def get_vestis_url() -> str:
+    """Base URL of the Vestis web UI for links in messages ('' if unset).
+    VESTIS_URL env var wins over the vestis_url config key."""
+    import os
+    return (os.environ.get("VESTIS_URL") or get_config("vestis_url") or "").strip().rstrip("/")
+
+
 def send_message(token: str, chat_id: str, text: str,
-                 parse_mode: str = "Markdown", max_retries: int = 3) -> bool:
-    """Send a Telegram message with exponential backoff retry."""
+                 parse_mode: str = "Markdown", max_retries: int = 3,
+                 link: tuple | None = None) -> bool:
+    """Send a Telegram message with exponential backoff retry.
+
+    link: optional (label, url) rendered as an inline URL button. Telegram
+    rejects button URLs it considers invalid (e.g. some LAN-only hosts) —
+    in that case the link is appended to the text instead.
+    """
     if not token or not chat_id:
         logger.warning("Telegram credentials missing — cannot send message")
         return False
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+    if link:
+        payload["reply_markup"] = {"inline_keyboard": [[{"text": link[0], "url": link[1]}]]}
     backoff = 1.0
     for attempt in range(1, max_retries + 1):
         try:
@@ -47,6 +66,11 @@ def send_message(token: str, chat_id: str, text: str,
                 logger.info("Telegram message sent")
                 return True
             logger.warning("Telegram send failed %s: %s", r.status_code, r.text[:200])
+            if r.status_code == 400 and "reply_markup" in payload and "url" in r.text.lower():
+                logger.warning("Telegram rejected the button URL — sending link as text")
+                payload.pop("reply_markup")
+                payload["text"] = f"{text}\n\n{link[1]}"
+                continue
         except Exception:
             logger.exception("Telegram send exception")
         time.sleep(backoff)

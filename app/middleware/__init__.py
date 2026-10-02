@@ -80,6 +80,7 @@ from .alerts import (
     get_alert_log_entries,
     fetch_symbol_data,
     evaluate_alert,
+    save_alert_state,
 )
 
 from .holdings import (
