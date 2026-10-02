@@ -17,6 +17,17 @@ export function LoadingOverlay({ label = 'Loading...' }) {
   )
 }
 
+export function ChartSkeleton({ height = 260, label = 'Loading…' }) {
+  return (
+    <div className="card" aria-busy="true" role="status">
+      <div className="rounded-lg bg-gray-800/40 animate-pulse flex items-center justify-center text-xs text-gray-600"
+           style={{ height }}>
+        {label}
+      </div>
+    </div>
+  )
+}
+
 // ── Error ─────────────────────────────────────────────────────────────────────
 
 export function ErrorMsg({ error, label = 'Failed to load data' }) {

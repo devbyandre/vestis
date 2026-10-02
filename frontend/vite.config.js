@@ -4,13 +4,15 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  // plotly.js's CommonJS sources reference Node's `global`
+  define: { global: 'globalThis' },
   resolve: {
-    alias: process.env.VITEST
-      ? {
-          // jsdom has no canvas/WebGL — stub the chart lib out under test.
-          'react-plotly.js': fileURLToPath(new URL('./src/test/plotlyStub.jsx', import.meta.url)),
-        }
-      : {},
+    alias: {
+      // jsdom has no canvas/WebGL — stub the chart lib out under test.
+      '@plot': fileURLToPath(new URL(
+        process.env.VITEST ? './src/test/plotlyStub.jsx' : './src/components/Plot.jsx',
+        import.meta.url)),
+    },
   },
   test: {
     environment: 'jsdom',

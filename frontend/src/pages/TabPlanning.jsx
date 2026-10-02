@@ -4,13 +4,13 @@ import toast from 'react-hot-toast'
 import { planningApi, portfolioApi, settingsApi } from '../lib/api'
 import { qk } from '../lib/queryClient'
 import { fmt, pnlColor, plotlyConfig, clamp } from '../lib/utils'
-import { LoadingOverlay, ErrorMsg, SortableTable, SectionHeader, Expander, Input, MetricCard } from '../components/ui'
+import { LoadingOverlay, ChartSkeleton, ErrorMsg, SortableTable, SectionHeader, Expander, Input, MetricCard } from '../components/ui'
 
 const Plot = lazy(() =>
   // Vite's dev-mode CJS interop for this package can double-wrap the
   // default export ({ default: { default: Component } }) depending on the
   // bundler version — unwrap defensively so it works either way.
-  import('react-plotly.js').then(m => ({ default: m.default?.default ?? m.default }))
+  import('@plot').then(m => ({ default: m.default?.default ?? m.default }))
 )
 function LazyPlot(props) {
   return <Suspense fallback={<div className="text-gray-500 text-xs py-4">Loading chart…</div>}><Plot {...props} /></Suspense>
@@ -388,13 +388,13 @@ export default function TabPlanning() {
   // One request computing all 4 groupings server-side from a single shared
   // holdings-timeseries fetch, instead of 4 separate round trips that each
   // redundantly re-fetch and re-process the same underlying data.
-  const { data: allocAll } = useQuery({ queryKey: qk.allocationOverTimeAll(ids), queryFn: () => planningApi.allocationOverTimeAll(ids) })
+  const { data: allocAll, isLoading: allocLoading } = useQuery({ queryKey: qk.allocationOverTimeAll(ids), queryFn: () => planningApi.allocationOverTimeAll(ids) })
   const allocTime = allocAll?.security_type
   const sectorTime = allocAll?.sector
   const industryTime = allocAll?.industry
   const symbolTime = allocAll?.symbol
-  const { data: riskTime = [] } = useQuery({ queryKey: qk.riskOverTime(ids, true), queryFn: () => planningApi.riskOverTime(ids, true) })
-  const { data: riskDetailedRaw = [] } = useQuery({ queryKey: qk.riskOverTime(ids, false), queryFn: () => planningApi.riskOverTime(ids, false) })
+  const { data: riskTime = [], isLoading: riskLoading } = useQuery({ queryKey: qk.riskOverTime(ids, true), queryFn: () => planningApi.riskOverTime(ids, true) })
+  const { data: riskDetailedRaw = [], isLoading: riskDetailLoading } = useQuery({ queryKey: qk.riskOverTime(ids, false), queryFn: () => planningApi.riskOverTime(ids, false) })
 
   const saveMut = useMutation({
     mutationFn: (vals) => settingsApi.update(vals),
@@ -543,26 +543,26 @@ export default function TabPlanning() {
               <LazyPlot data={[{ type: 'pie', labels: typeAlloc.labels, values: typeAlloc.values, hole: 0.5, textinfo: 'label+percent', textfont: { color: '#e5e7eb', size: 11 }, marker: { colors: AREA_COLORS } }]}
                 layout={{ ...BASE, height: 260, showlegend: false, margin: { l: 10, r: 10, t: 10, b: 10 } }} config={plotlyConfig} style={{ width: '100%' }} useResizeHandler />
             </div>
-            {allocTime?.dates?.length > 0 && areaChart('Allocation Over Time (by Type)', allocTime.dates, allocTime.series)}
+            {allocLoading ? <ChartSkeleton label="Loading allocation history…" /> : allocTime?.dates?.length > 0 && areaChart('Allocation Over Time (by Type)', allocTime.dates, allocTime.series)}
           </div>
 
-          {actualVsTargetBar('Asset Allocation: Actual vs Target', remapAssetTypeKeys(latestSnapshot(allocTime?.series, allocTime?.dates)), [
+          {allocLoading ? <ChartSkeleton /> : actualVsTargetBar('Asset Allocation: Actual vs Target', remapAssetTypeKeys(latestSnapshot(allocTime?.series, allocTime?.dates)), [
             { name: 'Target (Pre)', data: safeJson(settings?.asset_allocation_targets, {}).pre_retirement || {} },
             { name: 'Target (Post)', data: safeJson(settings?.asset_allocation_targets, {}).post_retirement || {} },
           ])}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {sectorTime?.dates?.length > 0 && areaChart('Sector Distribution Over Time', sectorTime.dates, sectorTime.series)}
-            {actualVsTargetBar('Sector: Actual vs Target', latestSnapshot(sectorTime?.series, sectorTime?.dates), [{ name: 'Target', data: sectorTargets }])}
+            {allocLoading ? <ChartSkeleton /> : sectorTime?.dates?.length > 0 && areaChart('Sector Distribution Over Time', sectorTime.dates, sectorTime.series)}
+            {allocLoading ? <ChartSkeleton /> : actualVsTargetBar('Sector: Actual vs Target', latestSnapshot(sectorTime?.series, sectorTime?.dates), [{ name: 'Target', data: sectorTargets }])}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {industryTime?.dates?.length > 0 && areaChart('Industry Distribution Over Time', industryTime.dates, industryTime.series)}
-            {actualVsTargetBar('Industry: Actual vs Target', latestSnapshot(industryTime?.series, industryTime?.dates), [{ name: 'Target', data: industryTargetsFlat }])}
+            {allocLoading ? <ChartSkeleton /> : industryTime?.dates?.length > 0 && areaChart('Industry Distribution Over Time', industryTime.dates, industryTime.series)}
+            {allocLoading ? <ChartSkeleton /> : actualVsTargetBar('Industry: Actual vs Target', latestSnapshot(industryTime?.series, industryTime?.dates), [{ name: 'Target', data: industryTargetsFlat }])}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {symbolTimeFiltered?.dates?.length > 0 && areaChart('Top 10 Securities Over Time', symbolTimeFiltered.dates, symbolTimeFiltered.series)}
+            {allocLoading ? <ChartSkeleton /> : symbolTimeFiltered?.dates?.length > 0 && areaChart('Top 10 Securities Over Time', symbolTimeFiltered.dates, symbolTimeFiltered.series)}
             {symbolTimeFiltered?.dates?.length > 0 && (
               <div className="card">
                 <p className="text-xs text-gray-500 mb-2">Top 10 Securities — Current Allocation</p>
@@ -579,6 +579,7 @@ export default function TabPlanning() {
             )}
           </div>
 
+          {riskLoading && <ChartSkeleton label="Loading risk history…" />}
           {riskTime.length > 0 && (
             <div className="card">
               <p className="text-xs text-gray-500 mb-2">Portfolio Risk vs Target</p>
@@ -593,6 +594,7 @@ export default function TabPlanning() {
             </div>
           )}
 
+          {riskDetailLoading && <ChartSkeleton height={320} label="Loading risk breakdown…" />}
           {riskDetailed.length > 0 && (
             <Expander title="Risk Breakdown Over Time" defaultOpen>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
