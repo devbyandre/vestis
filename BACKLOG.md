@@ -14,14 +14,11 @@ history of why they were proposed.
 
 ## 1. Feature gaps (things stubbed or explicitly deferred)
 
-- **News & Sentiment tab (L)** — `TabNews.jsx` is currently an 8-line "Coming
-  soon" placeholder, already scaffolded in the nav. This is the "sentiment
-  analysis of stock news" feature flagged early in the migration work.
-  Needs: a news-fetch pipeline (source TBD — Yahoo Finance news API is
-  already touched elsewhere in this codebase for other data), a sentiment
-  model/heuristic (even a simple lexicon-based score would beat nothing),
-  and a per-security or portfolio-wide feed UI. Worth scoping as its own
-  project — it's a backend+frontend feature, not a pure UI task.
+- **News & Sentiment follow-ups (S)** — the tab, `news_fetcher.py` and the
+  lexicon scorer in `sentiment.py` are done. Open: Yahoo has no headlines for
+  ETFs, crypto pairs and many EU listings (a second source such as RSS/Google
+  News would fix that), and the scorer reads headlines only (~70% come out
+  neutral). Swapping in an ML model only needs `score_headline` replaced.
 
 - **Recurring/scheduled investments (DCA planner) (M)** — flagged as a
   backlog feature early on ("repeating investments"). UI-wise: a form on

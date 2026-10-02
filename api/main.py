@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from routers import (
     portfolios, securities, holdings, transactions, analytics,
-    planning, watchlist, alerts, settings, health,
+    planning, watchlist, alerts, settings, health, news,
 )
 
 app = FastAPI(title="Vestis API", version="1.0.0")
@@ -39,6 +39,6 @@ app.add_middleware(
 
 for _router_module in (
     portfolios, securities, holdings, transactions, analytics,
-    planning, watchlist, alerts, settings, health,
+    planning, watchlist, alerts, settings, health, news,
 ):
     app.include_router(_router_module.router)

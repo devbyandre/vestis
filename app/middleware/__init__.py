@@ -60,6 +60,8 @@ from .watchlist import (
     get_watchlist_symbols,
 )
 
+from .news import get_news_feed, refresh_news
+
 from .valuation import (
     extract_fcf_from_cashflow_payloads,
     compute_dcf_raw,

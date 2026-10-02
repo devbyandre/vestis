@@ -131,3 +131,12 @@ from .fx import (
     get_latest_fx_rate,
     get_fx_series,
 )
+
+from .news import (
+    list_news_targets,
+    upsert_news,
+    record_news_fetch,
+    get_news_fetch_log,
+    get_news,
+    delete_news_older_than,
+)

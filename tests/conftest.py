@@ -200,6 +200,26 @@ def apply_schema(conn):
             triggered_at TEXT    NOT NULL,
             payload      TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS news (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            security_id  INTEGER NOT NULL,
+            uid          TEXT    NOT NULL,
+            title        TEXT    NOT NULL,
+            publisher    TEXT,
+            url          TEXT,
+            published_at TEXT    NOT NULL,
+            sentiment    REAL,
+            fetched_at   TEXT    NOT NULL,
+            UNIQUE (security_id, uid)
+        );
+
+        CREATE TABLE IF NOT EXISTS news_fetch_log (
+            security_id INTEGER PRIMARY KEY,
+            fetched_at  TEXT    NOT NULL,
+            items       INTEGER DEFAULT 0,
+            query       TEXT
+        );
     """)
     conn.commit()
 
@@ -220,6 +240,7 @@ def _patch_config_and_env(db_path, monkeypatch):
     settings to app/config.json on disk, which tests must never touch.
     """
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    sys.modules.pop("news_fetcher", None)   # binds db_utils at import time
     store = {"db_path": db_path, "taxonomy": {}, "tax_rate": 0.25}
     fake_cfg = types.ModuleType("config_utils")
     fake_cfg.get_config = lambda key: store.get(key)

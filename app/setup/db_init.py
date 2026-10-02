@@ -218,6 +218,30 @@ DDL_STATEMENTS = [
         payload      TEXT,
         FOREIGN KEY (alert_id) REFERENCES alerts(id)
     )""",
+
+    """CREATE TABLE IF NOT EXISTS news (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        security_id  INTEGER NOT NULL,
+        uid          TEXT    NOT NULL,
+        title        TEXT    NOT NULL,
+        publisher    TEXT,
+        url          TEXT,
+        published_at TEXT    NOT NULL,
+        sentiment    REAL,
+        fetched_at   TEXT    NOT NULL,
+        UNIQUE (security_id, uid),
+        FOREIGN KEY (security_id) REFERENCES securities(id)
+    )""",
+
+    "CREATE INDEX IF NOT EXISTS idx_news_published ON news (published_at)",
+
+    """CREATE TABLE IF NOT EXISTS news_fetch_log (
+        security_id INTEGER PRIMARY KEY,
+        fetched_at  TEXT    NOT NULL,
+        items       INTEGER DEFAULT 0,
+        query       TEXT,
+        FOREIGN KEY (security_id) REFERENCES securities(id)
+    )""",
 ]
 
 

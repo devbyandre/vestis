@@ -7,3 +7,7 @@
 */30   8-22        *    *      1-5       PYTHONPATH=/app python /app/data_fetcher.py
    0   23          *    *      1-5       PYTHONPATH=/app python /app/data_fetcher.py
    0    9          *    *      6         PYTHONPATH=/app python /app/data_fetcher.py
+
+# Headlines + sentiment for holdings and watchlist, every 2 hours on weekdays.
+# One run makes ~130 Yahoo requests (~3.5 min); symbols without coverage are only re-checked every 6 h.
+ 15   8-22/2      *    *      1-5       PYTHONPATH=/app python /app/news_fetcher.py

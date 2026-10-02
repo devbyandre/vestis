@@ -154,6 +154,7 @@ docker compose restart data-fetcher
 |---|---|---|
 | `data-fetcher` — full | 17:30 UTC Mon–Fri | Prices, KPIs, FX rates, financials |
 | `data-fetcher` — prices | 09:00 UTC Mon–Fri | Quick pre-market price refresh |
+| `data-fetcher` — news | :15 every 2 h, 08–22 UTC Mon–Fri | Headlines + sentiment (News tab); also via the Refresh button |
 | `telegram-worker` — immediate | Every 5 min Mon–Fri | Evaluate and fire instant alerts |
 | `telegram-worker` — digest | 19:00 UTC Mon–Fri | Send daily summary |
 
@@ -218,6 +219,8 @@ vestis/
 │   ├── db_utils.py             # Database abstraction (SQLite + PostgreSQL)
 │   ├── middleware.py           # Business logic, indicators, alert evaluation
 │   ├── data_fetcher.py         # Yahoo Finance data ingestion
+│   ├── news_fetcher.py         # Headlines for holdings/watchlist (cron + manual refresh)
+│   ├── sentiment.py            # Lexicon-based headline sentiment scorer
 │   ├── telegram_worker.py      # Cron entry point (alerts + digest over Telegram)
 │   ├── alerting/               # engine (evaluate/deliver/hold), digest, auto-alert maintenance, quiet hours, messages
 │   ├── config_utils.py         # Settings management
