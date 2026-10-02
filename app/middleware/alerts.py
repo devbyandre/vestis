@@ -5,6 +5,7 @@ import pandas as pd
 
 import db_utils as db
 from .indicators import rsi
+from .security_cache import get_security_cache_row, earnings_date
 from .valuation import compute_dcf_cached
 
 
@@ -306,7 +307,7 @@ def _load_state(alert: dict) -> dict:
 
 def _currency(alert: dict) -> str:
     try:
-        cache = db.get_security_cache(alert.get("security_id")) or {}
+        cache = get_security_cache_row(alert.get("security_id"))
         return str(cache.get("currency") or "")
     except Exception:
         return ""
@@ -458,10 +459,8 @@ def evaluate_alert(alert: dict) -> bool:
         # Earnings within `days` — once per earnings date.
         elif a_type == "earnings_soon":
             days = int(params.get("days", 3))
-            cache = db.get_security_cache(alert.get("security_id"))
-            ts = cache.get("earningsTimestamp") if cache else None
-            if ts:
-                earnings_dt = pd.Timestamp(ts).replace(tzinfo=None)
+            earnings_dt = earnings_date(get_security_cache_row(alert.get("security_id")))
+            if earnings_dt is not None:
                 now = pd.Timestamp.utcnow().replace(tzinfo=None)
                 diff = (earnings_dt - now).days
                 event = earnings_dt.strftime("%Y-%m-%d")
