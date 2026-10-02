@@ -218,7 +218,8 @@ vestis/
 │   ├── db_utils.py             # Database abstraction (SQLite + PostgreSQL)
 │   ├── middleware.py           # Business logic, indicators, alert evaluation
 │   ├── data_fetcher.py         # Yahoo Finance data ingestion
-│   ├── telegram_worker.py      # Alert notifications via Telegram
+│   ├── telegram_worker.py      # Cron entry point (alerts + digest over Telegram)
+│   ├── alerting/               # engine (evaluate/deliver/hold), digest, auto-alert maintenance, quiet hours, messages
 │   ├── config_utils.py         # Settings management
 │   ├── article_utils.py        # News article helpers
 │   └── setup/db_init.py        # Schema creation (run once at startup)

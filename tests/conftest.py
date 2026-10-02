@@ -295,12 +295,14 @@ def mw(db_path, monkeypatch):
 
 
 @pytest.fixture
-def telegram_worker(mw, monkeypatch):
-    """telegram_worker reloaded fresh, bound to the same DB as the `mw` fixture."""
-    sys.modules.pop("telegram_worker", None)
+def alerting(mw):
+    """The alerting package (engine, digest, maintenance) freshly bound to the
+    `mw` fixture's DB. Returns the package; use alerting.engine etc."""
+    _pop_package_modules("alerting")
     sys.modules.pop("telegram_client", None)
-    import telegram_worker as _tw
-    return _tw
+    import alerting as _a
+    import alerting.engine, alerting.digest, alerting.maintenance, alerting.messages  # noqa: F401
+    return _a
 
 
 def seed(db_path, sql, params=()):

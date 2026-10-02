@@ -8,7 +8,7 @@ from tests.conftest import seed_security
 
 @pytest.fixture
 def qh():
-    import quiet_hours
+    from alerting import quiet_hours
     return quiet_hours
 
 
@@ -51,53 +51,70 @@ class TestWindow:
         assert qh.quiet_hours_active(datetime(2026, 10, 2, 9, 0)) is False
 
 
-class TestWorker:
+class TestEngine:
     @pytest.fixture
-    def setup(self, mw, telegram_worker, db_path, monkeypatch):
+    def setup(self, mw, alerting, db_path, monkeypatch):
         sec_id = seed_security(db_path, "TSM")
-        alert_id = mw.create_alert(sec_id, "pct_change", {"pct": 5, "direction": "down"})
-        sent = []
-        cfg = {}
-        tw = telegram_worker
-        monkeypatch.setattr(tw, "_get_creds", lambda *a, **k: ("tok", "chat"))
-        monkeypatch.setattr(tw, "send_telegram", lambda tok, chat, text, **k: sent.append(text) or True)
-        monkeypatch.setattr(tw, "get_config", lambda k: cfg.get(k))
-        monkeypatch.setattr(tw, "set_config", lambda k, v: cfg.__setitem__(k, v))
+        mw.create_alert(sec_id, "pct_change", {"pct": 5, "direction": "down"})
+        sent, cfg = [], {}
+        eng = alerting.engine
+        monkeypatch.setattr(eng, "get_config", lambda k: cfg.get(k))
+        monkeypatch.setattr(eng, "set_config", lambda k, v: cfg.__setitem__(k, v))
 
         def fake_eval(alert):
             alert["_state"] = {"last_event": "2026-10-02"}
             alert["_detail"] = "-6.0% (100.00 → 94.00 USD)"
             return True
         monkeypatch.setattr(mw, "evaluate_alert", fake_eval)
-        return tw, mw, alert_id, sent, cfg
+        notify = lambda text, link=None: sent.append(text) or True
+        return eng, mw, notify, sent, cfg
 
     def test_alert_inside_quiet_hours_is_held_not_sent(self, setup, monkeypatch):
-        tw, mw, alert_id, sent, cfg = setup
-        monkeypatch.setattr(tw, "quiet_hours_active", lambda: True)
-        tw.run_immediate()
+        eng, mw, notify, sent, cfg = setup
+        monkeypatch.setattr(eng, "quiet_hours_active", lambda: True)
+        eng.run_immediate(notify)
         assert sent == []
         rows = mw.get_alert_history()
         assert [r["delivery"] for r in rows] == ["held"]
         assert rows[0]["detail"].startswith("-6.0%")
 
     def test_held_alerts_are_delivered_once_after_quiet_hours(self, setup, monkeypatch):
-        tw, mw, alert_id, sent, cfg = setup
-        monkeypatch.setattr(tw, "quiet_hours_active", lambda: True)
-        tw.run_immediate()
+        eng, mw, notify, sent, cfg = setup
+        monkeypatch.setattr(eng, "quiet_hours_active", lambda: True)
+        eng.run_immediate(notify)
 
-        monkeypatch.setattr(tw, "quiet_hours_active", lambda: False)
+        monkeypatch.setattr(eng, "quiet_hours_active", lambda: False)
         monkeypatch.setattr(mw, "evaluate_alert", lambda a: False)   # nothing new fires
-        tw.run_immediate()
+        eng.run_immediate(notify)
         assert len(sent) == 1
         assert "Held during quiet hours" in sent[0] and "TSM" in sent[0] and "-6.0%" in sent[0]
         assert cfg["last_held_flush"]
 
-        tw.run_immediate()
+        eng.run_immediate(notify)
         assert len(sent) == 1   # not repeated
 
+    def test_failed_delivery_keeps_alert_held_for_retry(self, setup, monkeypatch):
+        eng, mw, notify, sent, cfg = setup
+        monkeypatch.setattr(eng, "quiet_hours_active", lambda: True)
+        eng.run_immediate(notify)
+        monkeypatch.setattr(eng, "quiet_hours_active", lambda: False)
+        monkeypatch.setattr(mw, "evaluate_alert", lambda a: False)
+        eng.run_immediate(lambda text, link=None: False)
+        assert "last_held_flush" not in cfg
+        eng.run_immediate(notify)
+        assert len(sent) == 1
+
     def test_alerts_outside_quiet_hours_are_sent_immediately(self, setup, monkeypatch):
-        tw, mw, alert_id, sent, cfg = setup
-        monkeypatch.setattr(tw, "quiet_hours_active", lambda: False)
-        tw.run_immediate()
+        eng, mw, notify, sent, cfg = setup
+        monkeypatch.setattr(eng, "quiet_hours_active", lambda: False)
+        eng.run_immediate(notify)
         assert len(sent) == 1 and "Alert" in sent[0] and "Held" not in sent[0]
         assert [r["delivery"] for r in mw.get_alert_history()] == ["immediate"]
+
+    def test_unsent_alert_is_not_logged_and_fires_again(self, setup, monkeypatch):
+        eng, mw, notify, sent, cfg = setup
+        monkeypatch.setattr(eng, "quiet_hours_active", lambda: False)
+        eng.run_immediate(lambda text, link=None: False)
+        assert mw.get_alert_history() == []
+        eng.run_immediate(notify)
+        assert len(sent) == 1

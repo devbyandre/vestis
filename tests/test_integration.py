@@ -320,7 +320,7 @@ class TestHoldingsTimeseries:
 #
 # Regression tests for a reported bug: sold-out positions were silently
 # reappearing on the Watchlist tab (get_watchlist() excluded "currently
-# held" instead of "ever transacted"), and telegram_worker kept firing
+# held" instead of "ever transacted"), and the alert worker kept firing
 # automatic alerts for them forever (maintain_alerts() iterated ALL
 # ever-transacted securities instead of current holdings, and nothing
 # ever deactivated a stale automatic alert).
@@ -351,7 +351,7 @@ class TestAlertHoldingsInterdependency:
              (sec_id, date, price, price, price, price, price))
 
     def test_maintain_alerts_deactivates_alerts_for_sold_positions(
-        self, mw, telegram_worker, db_path, monkeypatch
+        self, mw, alerting, db_path, monkeypatch
     ):
         held_sec_id = seed_security(db_path, "MSFT")
         self._seed_price(db_path, held_sec_id, "2023-01-01", 300.0)
@@ -373,7 +373,7 @@ class TestAlertHoldingsInterdependency:
         # network calls in the per-holding alert-refresh loop that follows.
         monkeypatch.setattr(mw, "fetch_symbol_data", lambda symbol: {})
 
-        telegram_worker.maintain_alerts()
+        alerting.maintenance.maintain_alerts()
 
         alerts = mw.get_all_alerts_for_ui().set_index("id")
         assert int(alerts.loc[held_alert_id, "active"]) == 1

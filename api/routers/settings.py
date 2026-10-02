@@ -3,7 +3,7 @@ from pydantic import BaseModel
 
 from config_utils import get_all_config, set_config
 import telegram_client as tg
-from quiet_hours import is_valid_hhmm, is_valid_tz
+from alerting.quiet_hours import is_valid_hhmm, is_valid_tz
 
 router = APIRouter(tags=["settings"])
 
