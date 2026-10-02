@@ -6,24 +6,49 @@ import { alertsApi, securitiesApi } from '../lib/api'
 import { qk } from '../lib/queryClient'
 import { fmt } from '../lib/utils'
 import { useUrlParam, setUrlParams } from '../lib/urlState'
+import { ALERT_SCHEMAS, ALERT_TYPES, toFormValues, toParams, validateForm, describeAlert, isEditable } from '../lib/alertSchema'
 import { LoadingOverlay, ErrorMsg, SectionHeader, Modal, ConfirmModal, Pagination, Input, Select, Expander } from '../components/ui'
 
 const PAGE_SIZE = 15
 
-const ALERT_TYPES = ['price', 'rsi', 'ma_crossover', '52w', 'volume_spike', 'pct_change', 'earnings_soon', 'mos']
+const errMsg = e => e.response?.data?.detail || e.message
 
 function AlertForm({ initial, securities, onSubmit, onClose }) {
-  const [form, setForm] = useState(initial || {
-    security_id: '', alert_type: 'price', params: '{}',
-    note: '', notify_mode: 'immediate', cooldown_seconds: 14400, active: true,
+  const [form, setForm] = useState(() => {
+    const type = initial?.alert_type || 'price'
+    return {
+      security_id: initial?.security_id ?? '', alert_type: type,
+      note: initial?.note || '', notify_mode: initial?.notify_mode || 'immediate',
+      cooldown_seconds: initial?.cooldown_seconds ?? 14400, active: initial?.active ?? true,
+      values: toFormValues(type, initial?.params),
+    }
   })
+  const base = initial?.alert_type === form.alert_type ? initial?.params : {}
   const set = k => v => setForm(f => ({ ...f, [k]: v }))
+  const setValue = (k, v) => setForm(f => {
+    const values = { ...f.values, [k]: v }
+    // switching RSI zone swaps the default level (70 <-> 30) unless the user typed their own
+    if (f.alert_type === 'rsi' && k === 'direction') {
+      const untouched = f.values.threshold === (f.values.direction === 'above' ? '70' : '30')
+      if (untouched) values.threshold = v === 'above' ? '70' : '30'
+    }
+    return { ...f, values }
+  })
+  const changeType = type => setForm(f => ({ ...f, alert_type: type, values: toFormValues(type, {}) }))
+
+  const schema = ALERT_SCHEMAS[form.alert_type]
+  const preview = describeAlert(form.alert_type, toParams(form.alert_type, form.values))
 
   const handleSubmit = (e) => {
     e.preventDefault()
-    let params = {}
-    try { params = JSON.parse(form.params || '{}') } catch { toast.error('Invalid JSON in params'); return }
-    onSubmit({ ...form, params, security_id: Number(form.security_id), cooldown_seconds: Number(form.cooldown_seconds) })
+    const err = validateForm(form.alert_type, form.values)
+    if (err) { toast.error(err); return }
+    onSubmit({
+      security_id: Number(form.security_id), alert_type: form.alert_type,
+      params: toParams(form.alert_type, form.values, base),
+      note: form.note, notify_mode: form.notify_mode,
+      cooldown_seconds: Number(form.cooldown_seconds), active: form.active,
+    })
   }
 
   return (
@@ -35,16 +60,27 @@ function AlertForm({ initial, securities, onSubmit, onClose }) {
           {securities.map(s => <option key={s.id} value={s.id}>{s.symbol || s.yahoo_ticker} {s.name ? `— ${s.name}` : ''}</option>)}
         </select>
       </div>
-      <Select label="Alert Type" value={form.alert_type} onChange={set('alert_type')} options={ALERT_TYPES} />
-      <div>
-        <label className="label">Parameters (JSON)</label>
-        <textarea className="input font-mono text-xs" rows={3} value={form.params} onChange={e => set('params')(e.target.value)} />
-        <p className="text-xs text-gray-600 mt-0.5">e.g. {`{"threshold": 150, "direction": "below", "mode": "absolute"}`}</p>
+      <Select label="Alert type" value={form.alert_type} onChange={changeType}
+        options={ALERT_TYPES.map(t => ({ value: t, label: ALERT_SCHEMAS[t].label }))} />
+      <p className="text-xs text-gray-500 -mt-1">{schema.help}</p>
+      <div className="grid grid-cols-2 gap-3">
+        {schema.fields.map(f => f.type === 'select'
+          ? <Select key={f.key} label={f.label} value={form.values[f.key]} onChange={v => setValue(f.key, v)}
+              options={f.options.map(([value, label]) => ({ value, label }))} />
+          : <Input key={f.key} label={f.label} type="number" value={form.values[f.key]} onChange={v => setValue(f.key, v)}
+              min={f.min} max={f.max} step={f.step || '1'} />)}
+      </div>
+      <div className="text-xs text-accent-bright bg-surface-2 rounded-lg px-3 py-2">
+        You will be notified when: <span className="font-medium">{preview}</span>
       </div>
       <div className="grid grid-cols-2 gap-3">
         <Input label="Note" value={form.note} onChange={set('note')} />
-        <Select label="Notify Mode" value={form.notify_mode} onChange={set('notify_mode')}
-          options={['immediate', 'digest_daily', 'digest_weekly']} />
+        <Select label="Notify mode" value={form.notify_mode} onChange={set('notify_mode')}
+          options={[
+            { value: 'immediate', label: 'Immediately' },
+            { value: 'digest_daily', label: 'Daily digest' },
+            { value: 'digest_weekly', label: 'Weekly digest' },
+          ]} />
       </div>
       <Input label="Cooldown (seconds)" type="number" value={form.cooldown_seconds} onChange={set('cooldown_seconds')} min="0" />
       <div className="flex gap-2 justify-end">
@@ -58,7 +94,7 @@ function AlertForm({ initial, securities, onSubmit, onClose }) {
 // Open a security in the Technical tab (pushes history so Back returns here)
 const openTechnical = symbol => setUrlParams({ tab: 'technical', symbol, mode: null }, { push: true })
 
-function AlertHistory({ describeAlert }) {
+function AlertHistory() {
   const [page, setPage] = useState(1)
   const { data: rows = [], isLoading, error } = useQuery({
     queryKey: qk.alertHistory(), queryFn: () => alertsApi.history(500),
@@ -128,37 +164,22 @@ export default function TabAlerts() {
   const createMut = useMutation({
     mutationFn: alertsApi.create,
     onSuccess: () => { qc.invalidateQueries({ queryKey: qk.alerts() }); setShowAdd(false); toast.success('Alert created') },
-    onError: e => toast.error(e.message),
+    onError: e => toast.error(errMsg(e)),
   })
   const editMut = useMutation({
     mutationFn: ({ id, data }) => alertsApi.edit(id, data),
     onSuccess: () => { qc.invalidateQueries({ queryKey: qk.alerts() }); setEditAlert(null); toast.success('Updated') },
-    onError: e => toast.error(e.message),
+    onError: e => toast.error(errMsg(e)),
   })
   const deleteMut = useMutation({
     mutationFn: alertsApi.delete,
     onSuccess: () => { qc.invalidateQueries({ queryKey: qk.alerts() }); toast.success('Deleted') },
-    onError: e => toast.error(e.message),
+    onError: e => toast.error(errMsg(e)),
   })
   const toggleMut = useMutation({
     mutationFn: ({ id, active }) => alertsApi.edit(id, { active }),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.alerts() }),
   })
-
-  const describeAlert = (type, params) => {
-    try {
-      const p = typeof params === 'string' ? JSON.parse(params || '{}') : (params || {})
-      if (type === 'price') return `Price ${p.direction || ''} ${p.threshold != null ? fmt.currency(p.threshold, 2) : ''}`
-      if (type === 'pct_change') return `>${p.pct || 5}% ${p.direction || 'down'} over ${p.days || 1} trading day${(p.days || 1) > 1 ? 's' : ''}`
-      if (type === 'rsi') return p.direction
-        ? `RSI ${p.direction === 'below' ? '<' : '>'} ${p.threshold ?? (p.direction === 'below' ? 30 : 70)}`
-        : `RSI >${p.overbought || 70} / <${p.underbought || 30}`
-      if (type === 'ma_crossover') return `${p.crossover_type || 'golden'} cross ${p.short}/${p.long}`
-      if (type === '52w') return `52w ${p.type || 'high'}`
-      if (type === 'earnings_soon') return `Earnings ≤${p.days || 3} days`
-      return type
-    } catch { return type }
-  }
 
   const uniqueTypes = [...new Set(alerts.map(a => a.alert_type).filter(t => t !== 'split_pending'))].sort()
 
@@ -176,7 +197,7 @@ export default function TabAlerts() {
         </div>
       } />
 
-      {view === 'history' ? <AlertHistory describeAlert={describeAlert} /> : <>
+      {view === 'history' ? <AlertHistory /> : <>
 
       {/* Filters */}
       <div className="card flex flex-wrap gap-3 items-center">
@@ -193,14 +214,9 @@ export default function TabAlerts() {
 
       <Expander title="ℹ️ Alert Type Descriptions">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1 text-xs text-gray-400">
-          <div><span className="text-gray-200 font-medium">price</span> — triggers when price crosses a threshold (params: threshold, direction)</div>
-          <div><span className="text-gray-200 font-medium">rsi</span> — triggers on RSI overbought/oversold crossing (params: threshold, direction OR overbought, underbought)</div>
-          <div><span className="text-gray-200 font-medium">ma_crossover</span> — golden/death cross of two moving averages (params: short, long, crossover_type)</div>
-          <div><span className="text-gray-200 font-medium">52w</span> — new 52-week high or low (params: type)</div>
-          <div><span className="text-gray-200 font-medium">volume_spike</span> — abnormal volume vs average (params: multiplier)</div>
-          <div><span className="text-gray-200 font-medium">pct_change</span> — percent move over N days (params: pct, direction, days)</div>
-          <div><span className="text-gray-200 font-medium">earnings_soon</span> — upcoming earnings within N days (params: days)</div>
-          <div><span className="text-gray-200 font-medium">mos</span> — margin-of-safety vs intrinsic value (params: threshold)</div>
+          {ALERT_TYPES.map(t => (
+            <div key={t}><span className="text-gray-200 font-medium">{ALERT_SCHEMAS[t].label}</span> — {ALERT_SCHEMAS[t].help}</div>
+          ))}
         </div>
       </Expander>
 
@@ -230,7 +246,7 @@ export default function TabAlerts() {
                   </td>
                   <td className="td">
                     <div className="flex gap-2">
-                      <button className="text-gray-600 hover:text-accent transition-colors" onClick={() => setEditAlert(r)}><Pencil size={12} /></button>
+                      {isEditable(r) && <button className="text-gray-600 hover:text-accent transition-colors" onClick={() => setEditAlert(r)}><Pencil size={12} /></button>}
                       <button className="text-gray-600 hover:text-danger transition-colors" onClick={() => setDeleteAlert(r)}><Trash2 size={12} /></button>
                     </div>
                   </td>
@@ -251,7 +267,7 @@ export default function TabAlerts() {
 
       {editAlert && (
         <Modal open={!!editAlert} onClose={() => setEditAlert(null)} title="Edit Alert" wide>
-          <AlertForm initial={{ ...editAlert, params: typeof editAlert.params === 'object' ? JSON.stringify(editAlert.params, null, 2) : editAlert.params }}
+          <AlertForm initial={editAlert}
             securities={securities}
             onSubmit={data => editMut.mutate({ id: editAlert.id, data })}
             onClose={() => setEditAlert(null)} />

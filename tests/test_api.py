@@ -236,6 +236,39 @@ class TestAlertsAPI:
         assert r.status_code == 200
         assert api_client.get("/alerts").json() == []
 
+    def test_alert_params_are_validated(self, api_client, db_path):
+        sec_id = seed_security(db_path, "TSLA")
+        bad = [
+            ("rsi", {"threshold": 150, "direction": "above"}),
+            ("rsi", {"threshold": 70, "direction": "sideways"}),
+            ("ma_crossover", {"short": 200, "long": 50}),
+            ("pct_change", {"pct": 0, "direction": "down"}),
+            ("price", {"direction": "above"}),
+            ("bogus", {}),
+        ]
+        for t, p in bad:
+            r = api_client.post("/alerts", json={"security_id": sec_id, "alert_type": t, "params": p})
+            assert r.status_code == 422, (t, p, r.text)
+        assert api_client.get("/alerts").json() == []
+
+        r = api_client.post("/alerts", json={"security_id": sec_id, "alert_type": "rsi",
+                                             "params": {"threshold": "30", "direction": "below"}})
+        assert r.status_code == 200
+        stored = api_client.get("/alerts").json()[0]
+        assert json.loads(stored["params"])["threshold"] == 30.0
+
+    def test_edit_alert_validates_against_stored_type_and_can_change_type(self, api_client, db_path):
+        sec_id = seed_security(db_path, "TSLA")
+        aid = api_client.post("/alerts", json={"security_id": sec_id, "alert_type": "rsi",
+                                               "params": {"threshold": 70, "direction": "above"}}).json()["id"]
+        assert api_client.put(f"/alerts/{aid}", json={"params": {"threshold": 500}}).status_code == 422
+        assert api_client.put(f"/alerts/{aid}", json={"params": {"threshold": 75}}).status_code == 200
+        r = api_client.put(f"/alerts/{aid}", json={"alert_type": "52w", "params": {"type": "low"}})
+        assert r.status_code == 200
+        stored = api_client.get("/alerts").json()[0]
+        assert stored["alert_type"] == "52w"
+        assert api_client.put("/alerts/9999", json={"params": {"threshold": 75}}).status_code == 404
+
     def test_alert_history(self, api_client, db_path):
         import db_utils as db
         sec_id = seed_security(db_path, "BAYN.DE")

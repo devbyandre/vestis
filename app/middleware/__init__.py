@@ -13,6 +13,8 @@ Re-exports every public name so every existing call site across the repo
 # copy), mutating attributes via mw.db.* affects what the submodules see too.
 import db_utils as db
 
+from .alert_params import validate_alert_params, ALERT_TYPES
+
 from .indicators import (
     sma,
     ema,
