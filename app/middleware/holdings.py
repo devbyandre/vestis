@@ -32,54 +32,30 @@ def get_latest_holdings_snapshot(
     sector, industry, security_type, exchange, quantity, market_value, cost_basis,
     abs_perf, rel_perf, security_label
     """
-    df = holdings_timeseries(
+    latest = db.get_holdings_timeseries(
         portfolio_ids=portfolio_ids,
         sectors=sectors,
         industries=industries,
         security_types=security_types,
         symbols=symbols,
         exchanges=exchanges,
-        aggregate=False   # 🔑 get raw rows
+        latest_only=True,
     )
-    if df.empty:
+    if latest.empty:
         return pd.DataFrame()
 
-    df['date'] = pd.to_datetime(df['date'])
+    # Each security contributes its own most recent row (not the global max
+    # date) so securities whose prices haven't been fetched today yet don't
+    # drop off. Like the forward-filled timeseries, they carry the global
+    # latest date.
+    latest['date'] = latest['date'].max()
 
-    # For each security+portfolio, take only its own most recent row.
-    # Using global MAX would drop securities whose prices haven't been
-    # fetched today yet — they'd fall off when any other security updates.
-    latest = (
-        df.sort_values('date')
-          .groupby(['security_id', 'portfolio_id'], as_index=False)
-          .last()
-    ).copy()
-
-    # Filter out fully sold positions: recompute skips qty<=0 rows, so the
-    # last row in holdings_timeseries is pre-sell. Check actual net quantity
-    # from transactions directly.
-    if not latest.empty and 'security_id' in latest.columns and 'portfolio_id' in latest.columns:
-        keep = []
-        for _, row in latest.iterrows():
-            try:
-                sid = int(row['security_id'])
-                pid = int(row['portfolio_id'])
-                tx_df = db.list_transactions_for_security(pid, sid)
-                if tx_df is None or tx_df.empty:
-                    keep.append(False)
-                    continue
-                net = 0.0
-                for _, tx in tx_df.iterrows():
-                    t = str(tx.get('type', '')).lower()
-                    q = float(tx.get('quantity') or 0)
-                    if t == 'buy':
-                        net += q
-                    elif t == 'sell':
-                        net -= q
-                keep.append(net > 1e-8)
-            except Exception:
-                keep.append(True)  # on error, keep the row
-        latest = latest[keep].copy()
+    # Drop fully sold positions: the last timeseries row is pre-sell, so use
+    # the actual net quantity from transactions.
+    net = db.get_net_quantities()
+    keep = [net.get((int(p), int(s)), 0.0) > 1e-8
+            for p, s in zip(latest['portfolio_id'], latest['security_id'])]
+    latest = latest[keep].copy()
 
     # compute performance columns
     latest['cost_basis'] = latest.get('cost_basis', 0.0)

@@ -155,6 +155,20 @@ def list_transactions_for_security(portfolio_id: int, security_id: int, conn=Non
     )
 
 
+def get_net_quantities() -> dict:
+    """{(portfolio_id, security_id): buys - sells} for every position ever traded."""
+    df = _read_sql("""
+        SELECT portfolio_id, security_id,
+               SUM(CASE WHEN LOWER(type) = 'buy' THEN COALESCE(quantity, 0)
+                        WHEN LOWER(type) = 'sell' THEN -COALESCE(quantity, 0)
+                        ELSE 0 END) AS net
+        FROM transactions
+        GROUP BY portfolio_id, security_id
+    """)
+    return {(int(r.portfolio_id), int(r.security_id)): float(r.net or 0.0)
+            for r in df.itertuples(index=False)}
+
+
 def delete_transaction(tx_id: int) -> None:
     row = _read_sql(
         "SELECT security_id AS sid, portfolio_id AS pid FROM transactions WHERE id=?", (tx_id,)

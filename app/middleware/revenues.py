@@ -1,3 +1,4 @@
+from bisect import bisect_right
 from typing import Optional
 import pandas as pd
 
@@ -21,9 +22,21 @@ def calc_dividends_for_portfolio(portfolio_ids: Optional[list] = None, year: Opt
 
     tickers = tx['symbol'].dropna().unique()
 
+    tx = tx.copy()
+    is_buy = tx['type'].astype(str).str.lower() == 'buy'
+    tx['qty_signed'] = tx['quantity'].where(is_buy, -tx['quantity'])
+
     for sym in tickers:
         df_divs = db.get_dividends(sym)
         if df_divs.empty:
+            continue
+
+        # Per portfolio: transaction dates and running net quantity, so each
+        # dividend is a binary search instead of re-filtering the frame.
+        positions = {}
+        for pid, g in tx[tx['symbol'] == sym].sort_values('tx_date').groupby('portfolio_id'):
+            positions[pid] = (g['tx_date'].tolist(), g['qty_signed'].cumsum().tolist())
+        if not positions:
             continue
 
         for _, d in df_divs.iterrows():
@@ -33,18 +46,10 @@ def calc_dividends_for_portfolio(portfolio_ids: Optional[list] = None, year: Opt
             if year and yr != int(year):
                 continue
 
-            df_sym = tx[tx['symbol']==sym]
-            if df_sym.empty:
-                continue
-
-            df_sym = df_sym.copy()
-            df_sym['qty_signed'] = df_sym.apply(lambda r: r['quantity'] if r['type'].lower()=='buy' else -r['quantity'], axis=1)
-            df_sym = df_sym[df_sym['tx_date'] <= d_date]
-            if df_sym.empty:
-                continue
-
-            holdings_by_port = df_sym.groupby('portfolio_id').qty_signed.sum().to_dict()
-            for pid, qty in holdings_by_port.items():
+            for pid in sorted(positions):
+                dates, cum = positions[pid]
+                n = bisect_right(dates, d_date)
+                qty = cum[n - 1] if n else 0.0
                 if qty <= 0:
                     continue
                 rows.append({

@@ -11,6 +11,9 @@ fragile cross-module circular import for no benefit, since they're only ever
 used together.
 """
 import logging
+import os
+import threading
+import time
 from collections import deque
 from typing import Optional, List
 import numpy as np
@@ -28,6 +31,21 @@ from .fx import get_fx_series
 # time, after both modules have finished loading, regardless of which one
 # the __init__.py re-export happens to import first.
 from . import transactions as _transactions
+
+
+# The holdings frame is by far the most expensive read (tens of thousands of
+# rows) and the Planning tab asks for it from several endpoints at once, so
+# identical requests share one result for a short time. Writes made through
+# this process drop it immediately; writes from other processes (cron
+# workers) show up once the TTL expires. 0 disables the cache.
+_TS_TTL = float(os.environ.get("HOLDINGS_CACHE_SECONDS", "60"))
+_ts_cache: dict = {}
+_ts_lock = threading.Lock()
+
+
+def invalidate_holdings_cache() -> None:
+    with _ts_lock:
+        _ts_cache.clear()
 
 
 def insert_holdings_timeseries(records: list, conn=None) -> None:
@@ -59,6 +77,7 @@ def insert_holdings_timeseries(records: list, conn=None) -> None:
     finally:
         if own:
             conn.close()
+        invalidate_holdings_cache()
 
 
 def list_portfolios_holding_security(security_id: int) -> List[int]:
@@ -134,13 +153,15 @@ def clear_holdings_timeseries(security_id: int, portfolio_id: Optional[int] = No
     if own:
         conn.commit()
         conn.close()
+    invalidate_holdings_cache()
 
 
-def get_holdings_timeseries(
+def _query_holdings_timeseries(
     portfolio_ids=None, sectors=None, industries=None,
     security_types=None, symbols=None, exchanges=None,
-    start_date=None, end_date=None,
+    start_date=None, end_date=None, latest_only=False,
 ) -> pd.DataFrame:
+    """latest_only keeps just each portfolio+security's own most recent row."""
     sql = """
         SELECT ht.date, ht.portfolio_id, ht.security_id,
                ht.quantity, ht.market_value, ht.cost_basis,
@@ -156,6 +177,15 @@ def get_holdings_timeseries(
         WHERE 1=1
     """
     params: list = []
+    if latest_only:
+        sql = sql.replace("WHERE 1=1", """
+        JOIN (SELECT portfolio_id, security_id, MAX(date) AS max_date
+              FROM holdings_timeseries
+              WHERE quantity > 0 OR market_value > 0
+              GROUP BY portfolio_id, security_id) lt
+          ON lt.portfolio_id = ht.portfolio_id AND lt.security_id = ht.security_id
+         AND lt.max_date = ht.date
+        WHERE 1=1""")
 
     def _add_in(col, vals):
         nonlocal sql
@@ -197,6 +227,29 @@ def get_holdings_timeseries(
         df[m] = df[m].fillna("Unknown")
     return df
 
+
+
+def get_holdings_timeseries(
+    portfolio_ids=None, sectors=None, industries=None,
+    security_types=None, symbols=None, exchanges=None,
+    start_date=None, end_date=None, latest_only=False,
+) -> pd.DataFrame:
+    """Holdings rows (see _query_holdings_timeseries), shared briefly between
+    identical concurrent requests. Always returns a private copy."""
+    if _TS_TTL <= 0:
+        return _query_holdings_timeseries(portfolio_ids, sectors, industries, security_types,
+                                          symbols, exchanges, start_date, end_date, latest_only)
+    key = tuple(tuple(v) if isinstance(v, (list, set)) else v for v in
+                (portfolio_ids, sectors, industries, security_types, symbols, exchanges,
+                 start_date, end_date, latest_only))
+    with _ts_lock:
+        hit = _ts_cache.get(key)
+        if hit and time.monotonic() - hit[0] < _TS_TTL:
+            return hit[1].copy()
+        df = _query_holdings_timeseries(portfolio_ids, sectors, industries, security_types,
+                                        symbols, exchanges, start_date, end_date, latest_only)
+        _ts_cache[key] = (time.monotonic(), df)
+        return df.copy()
 
 
 def recompute_holdings_timeseries(portfolio_id: int, security_id: int, conn=None) -> None:
@@ -301,6 +354,7 @@ def recompute_holdings_timeseries(portfolio_id: int, security_id: int, conn=None
     finally:
         if own:
             conn.close()
+        invalidate_holdings_cache()
 
 
 def get_security_risk_timeseries(security_id: int, start_date=None, end_date=None) -> pd.DataFrame:
@@ -400,41 +454,45 @@ def update_security_risk_timeseries(security_id: int, portfolio_ids=None, conn=N
             conn.close()
 
 
-def get_portfolio_risk_timeseries(portfolio_ids=None) -> pd.DataFrame:
-    df_hold = get_holdings_timeseries(portfolio_ids=portfolio_ids)
-    if df_hold.empty:
-        return pd.DataFrame(columns=["date", "portfolio_id", "weighted_risk"])
+def get_security_risk_timeseries_many(security_ids) -> pd.DataFrame:
+    """Risk rows for several securities in one query."""
+    ids = [int(i) for i in security_ids]
+    if not ids:
+        return pd.DataFrame()
+    ph = ", ".join([_ph()] * len(ids))
+    df = _read_sql(
+        f"SELECT * FROM security_risk_timeseries WHERE security_id IN ({ph}) ORDER BY date",
+        tuple(ids),
+    )
+    df["security_id"] = df["security_id"].astype(int)
+    df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
+    return df
 
+
+def _holdings_with_risk(df_hold: pd.DataFrame) -> pd.DataFrame:
+    """Join each holdings row with the nearest risk observation of its security."""
+    df_hold = df_hold.copy()
     df_hold["security_id"] = df_hold["security_id"].astype(int)
     df_hold["date"] = pd.to_datetime(df_hold["date"]).dt.tz_localize(None)
-    securities = df_hold["security_id"].unique()
+    df_risk = get_security_risk_timeseries_many(df_hold["security_id"].unique())
+    if df_risk.empty:
+        return pd.DataFrame()
+    merged = pd.merge_asof(
+        df_hold.sort_values("date"), df_risk.sort_values("date"),
+        on="date", by="security_id",
+        direction="nearest", tolerance=pd.Timedelta("3650D"),
+    )
+    return merged.dropna(subset=["weighted_risk"]).reset_index(drop=True)
 
-    risk_dfs = []
-    for sec_id in securities:
-        df_sec = get_security_risk_timeseries(int(sec_id))
-        if not df_sec.empty:
-            df_sec["security_id"] = df_sec["security_id"].astype(int)
-            df_sec["date"] = pd.to_datetime(df_sec["date"]).dt.tz_localize(None)
-            risk_dfs.append(df_sec)
 
-    if not risk_dfs:
-        return pd.DataFrame(columns=["date", "portfolio_id", "weighted_risk"])
-
-    df_risk = pd.concat(risk_dfs, ignore_index=True)
-    df_list = []
-    for sec_id in securities:
-        dh = df_hold[df_hold["security_id"] == sec_id].sort_values("date")
-        dr = df_risk[df_risk["security_id"] == sec_id].sort_values("date")
-        if dh.empty or dr.empty:
-            continue
-        merged = pd.merge_asof(dh, dr, on="date", by="security_id",
-                               direction="nearest", tolerance=pd.Timedelta("3650D"))
-        df_list.append(merged)
-
-    if not df_list:
-        return pd.DataFrame(columns=["date", "portfolio_id", "weighted_risk"])
-
-    df = pd.concat(df_list, ignore_index=True).dropna(subset=["weighted_risk"])
+def get_portfolio_risk_timeseries(portfolio_ids=None) -> pd.DataFrame:
+    empty = pd.DataFrame(columns=["date", "portfolio_id", "weighted_risk"])
+    df_hold = get_holdings_timeseries(portfolio_ids=portfolio_ids)
+    if df_hold.empty:
+        return empty
+    df = _holdings_with_risk(df_hold)
+    if df.empty:
+        return empty
     return (df.groupby(["date", "portfolio_id"])["weighted_risk"]
               .sum().reset_index().sort_values("date"))
 
@@ -444,28 +502,4 @@ def get_portfolio_risk_timeseries_detailed(portfolio_ids=None) -> pd.DataFrame:
     if df_hold.empty:
         return pd.DataFrame(columns=["date","portfolio_id","security_id","symbol",
                                       "sector","industry","security_type","market_value","weighted_risk"])
-    df_hold["security_id"] = df_hold["security_id"].astype(int)
-    df_hold["date"] = pd.to_datetime(df_hold["date"]).dt.tz_localize(None)
-    securities = df_hold["security_id"].unique()
-    risk_dfs = []
-    for sec_id in securities:
-        df_sec = get_security_risk_timeseries(sec_id)
-        if not df_sec.empty:
-            df_sec["security_id"] = df_sec["security_id"].astype(int)
-            df_sec["date"] = pd.to_datetime(df_sec["date"]).dt.tz_localize(None)
-            risk_dfs.append(df_sec)
-    if not risk_dfs:
-        return pd.DataFrame()
-    df_risk = pd.concat(risk_dfs, ignore_index=True)
-    df_list = []
-    for sec_id in securities:
-        dh = df_hold[df_hold["security_id"] == sec_id].sort_values("date")
-        dr = df_risk[df_risk["security_id"] == sec_id].sort_values("date")
-        if dh.empty or dr.empty:
-            continue
-        merged = pd.merge_asof(dh, dr, on="date", by="security_id",
-                               direction="nearest", tolerance=pd.Timedelta("3650D"))
-        df_list.append(merged)
-    if not df_list:
-        return pd.DataFrame()
-    return pd.concat(df_list, ignore_index=True).dropna(subset=["weighted_risk"])
+    return _holdings_with_risk(df_hold)

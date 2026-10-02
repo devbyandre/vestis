@@ -97,6 +97,13 @@ def get_risk_over_time(portfolio_ids: Optional[str] = Query(None), aggregate: bo
     df = df.copy()
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+    if not aggregate:
+        # The per-security frame carries every holdings column for every day
+        # (25 MB for ~60k rows); the charts only need these, summed over
+        # portfolios.
+        keys = ["date", "symbol", "security_type", "sector", "industry"]
+        df = (df.groupby(keys, as_index=False, sort=True, dropna=False)["weighted_risk"].sum()
+                .round({"weighted_risk": 6}))
     return _df(df)
 
 
