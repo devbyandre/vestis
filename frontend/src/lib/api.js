@@ -91,6 +91,7 @@ export const watchlistApi = {
 // ── Alerts ────────────────────────────────────────────────────────────────────
 export const alertsApi = {
   list: (active_only = false) => get('/alerts', { active_only }),
+  history: (limit = 200) => get('/alerts/history', { limit }),
   create: (alert) => post('/alerts', alert),
   edit: (id, data) => put(`/alerts/${id}`, data),
   delete: (id) => del(`/alerts/${id}`),
@@ -117,4 +118,5 @@ export const planningApi = {
 export const settingsApi = {
   get: () => get('/settings'),
   update: (settings) => put('/settings', { settings }),
+  telegramTest: () => post('/settings/telegram-test'),
 }

@@ -41,6 +41,11 @@ export default function TabSettings() {
     onSuccess: () => toast.success('Settings saved'),
     onError: e => toast.error(e.message),
   })
+  const testMut = useMutation({
+    mutationFn: settingsApi.telegramTest,
+    onSuccess: r => toast.success(r.button ? 'Test message sent — check the "Open Vestis" button' : 'Test message sent'),
+    onError: e => toast.error(e.response?.data?.detail || e.message),
+  })
 
   if (isLoading) return <LoadingOverlay />
   if (error) return <ErrorMsg error={error} />
@@ -75,6 +80,12 @@ export default function TabSettings() {
             className="rounded border-surface-3 bg-surface-2" />
           Enable Do Not Disturb (skip immediate alerts during DND hours)
         </label>
+        <div className="flex items-center gap-3">
+          <button className="btn-ghost text-xs" onClick={() => testMut.mutate()} disabled={testMut.isPending}>
+            {testMut.isPending ? 'Sending…' : 'Send test message'}
+          </button>
+          <span className="text-xs text-gray-600">Uses the saved settings — save changes first.</span>
+        </div>
       </Section>
 
       <Section title="Tax & Valuation">

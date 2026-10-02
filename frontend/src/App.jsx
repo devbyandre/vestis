@@ -1,6 +1,7 @@
-import { useState, lazy, Suspense } from 'react'
+import { lazy, Suspense } from 'react'
 import { BarChart2, TrendingUp, BookOpen, ArrowLeftRight, Eye, Bell, Settings, Newspaper, DollarSign } from 'lucide-react'
 import { LoadingOverlay } from './components/ui'
+import { useUrlParam, setUrlParams } from './lib/urlState'
 
 // Lazy load each tab — only bundles what's needed
 const TabPortfolio      = lazy(() => import('./pages/TabPortfolio'))
@@ -26,7 +27,13 @@ const TABS = [
 ]
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('portfolio')
+  const [activeTab, setTab] = useUrlParam('tab', 'portfolio', { push: true })
+  // Tab-specific params (symbol, mode, …) don't carry over to another tab
+  const setActiveTab = id => {
+    if (id === activeTab) return
+    setUrlParams({ symbol: null, mode: null })
+    setTab(id)
+  }
   const ActiveComponent = TABS.find(t => t.id === activeTab)?.component ?? TabPortfolio
 
   return (

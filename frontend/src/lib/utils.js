@@ -24,6 +24,12 @@ export const fmt = {
       maximumFractionDigits: decimals,
     })
   },
+  dateTime: (v) => {
+    if (!v) return '—'
+    return new Date(v).toLocaleString('de-DE', {
+      day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    })
+  },
   date: (v) => {
     if (!v) return '—'
     return new Date(v).toLocaleDateString('de-DE', {

@@ -99,6 +99,22 @@ def get_alert_log_entries(since_ts: str, notify_mode: str) -> List[Dict]:
 
 
 
+def get_alert_history(limit: int = 200, alert_id: Optional[int] = None) -> List[Dict]:
+    """Recent triggers for the UI; payload JSON unpacked into delivery/detail."""
+    df = db.get_alert_history(limit=limit, alert_id=alert_id)
+    rows = []
+    for r in df.to_dict("records"):
+        try:
+            payload = json.loads(r.pop("payload") or "{}")
+        except Exception:
+            payload = {}
+        note = str(payload.get("note") or "")
+        r["delivery"] = "digest" if note.startswith("digest") else "immediate"
+        r["detail"] = payload.get("detail")
+        rows.append(r)
+    return rows
+
+
 def fetch_symbol_data(symbol: str) -> dict:
     """
     Gather latest market data and indicators for a symbol.

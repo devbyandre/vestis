@@ -104,6 +104,7 @@ from .alerts import (
     get_active_alerts,
     get_alert_by_id,
     get_alerts_for_digest,
+    get_alert_history,
 )
 
 from .holdings import (

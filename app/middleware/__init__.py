@@ -78,6 +78,7 @@ from .alerts import (
     log_trigger,
     last_trigger,
     get_alert_log_entries,
+    get_alert_history,
     fetch_symbol_data,
     evaluate_alert,
     save_alert_state,

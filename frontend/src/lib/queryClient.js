@@ -38,6 +38,7 @@ export const qk = {
   indicators: (symbol, opts) => ['analytics', 'indicators', symbol, opts],
   watchlist: () => ['watchlist'],
   alerts: () => ['alerts'],
+  alertHistory: () => ['alerts', 'history'],
   kpis: (ids) => ['planning', 'kpis', ids],
   settings: () => ['settings'],
 }

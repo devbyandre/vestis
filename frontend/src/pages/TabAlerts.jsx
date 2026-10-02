@@ -5,6 +5,7 @@ import toast from 'react-hot-toast'
 import { alertsApi, securitiesApi } from '../lib/api'
 import { qk } from '../lib/queryClient'
 import { fmt } from '../lib/utils'
+import { useUrlParam, setUrlParams } from '../lib/urlState'
 import { LoadingOverlay, ErrorMsg, SectionHeader, Modal, ConfirmModal, Pagination, Input, Select, Expander } from '../components/ui'
 
 const PAGE_SIZE = 15
@@ -54,7 +55,55 @@ function AlertForm({ initial, securities, onSubmit, onClose }) {
   )
 }
 
+// Open a security in the Technical tab (pushes history so Back returns here)
+const openTechnical = symbol => setUrlParams({ tab: 'technical', symbol, mode: null }, { push: true })
+
+function AlertHistory({ describeAlert }) {
+  const [page, setPage] = useState(1)
+  const { data: rows = [], isLoading, error } = useQuery({
+    queryKey: qk.alertHistory(), queryFn: () => alertsApi.history(500),
+  })
+  if (isLoading) return <LoadingOverlay />
+  if (error) return <ErrorMsg error={error} />
+  const paged = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  return (
+    <div className="card overflow-hidden p-0">
+      <div className="px-4 py-2 border-b border-surface-3 text-xs text-gray-500">
+        {rows.length ? `Last ${rows.length} triggers — what fired, when, and with which values` : 'No alerts have fired yet.'}
+      </div>
+      {rows.length > 0 && (
+        <table className="w-full text-left">
+          <thead><tr className="border-b border-surface-3">
+            {['When', 'Security', 'Alert', 'Values', 'Note', 'Delivered'].map(h => <th key={h} className="th">{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {paged.map(r => (
+              <tr key={r.id} className="table-row">
+                <td className="td text-xs text-gray-400 whitespace-nowrap">{fmt.dateTime(r.triggered_at)}</td>
+                <td className="td text-xs">
+                  {r.symbol
+                    ? <button className="font-medium text-accent-bright hover:underline" title={r.security_name || ''}
+                        onClick={() => openTechnical(r.symbol)}>{r.symbol}</button>
+                    : '—'}
+                </td>
+                <td className="td text-xs text-gray-300">{describeAlert(r.alert_type, r.params)}</td>
+                <td className="td text-xs text-gray-400">{r.detail || '—'}</td>
+                <td className="td text-xs text-gray-500">{r.note || '—'}</td>
+                <td className="td"><span className={`badge text-xs ${r.delivery === 'digest' ? 'bg-surface-3 text-gray-400' : 'badge-blue'}`}>{r.delivery}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div className="px-4 py-2 border-t border-surface-3">
+        <Pagination page={page} total={rows.length} pageSize={PAGE_SIZE} onChange={setPage} />
+      </div>
+    </div>
+  )
+}
+
 export default function TabAlerts() {
+  const [view, setView] = useUrlParam('mode', 'manage')
   const qc = useQueryClient()
   const [page, setPage] = useState(1)
   const [statusFilter, setStatusFilter] = useState('active')
@@ -100,8 +149,10 @@ export default function TabAlerts() {
     try {
       const p = typeof params === 'string' ? JSON.parse(params || '{}') : (params || {})
       if (type === 'price') return `Price ${p.direction || ''} ${p.threshold != null ? fmt.currency(p.threshold, 2) : ''}`
-      if (type === 'pct_change') return `>${p.pct || 5}% ${p.direction || 'down'} in ${p.days || 1}d`
-      if (type === 'rsi') return `RSI >${p.overbought || 70} / <${p.underbought || 30}`
+      if (type === 'pct_change') return `>${p.pct || 5}% ${p.direction || 'down'} over ${p.days || 1} trading day${(p.days || 1) > 1 ? 's' : ''}`
+      if (type === 'rsi') return p.direction
+        ? `RSI ${p.direction === 'below' ? '<' : '>'} ${p.threshold ?? (p.direction === 'below' ? 30 : 70)}`
+        : `RSI >${p.overbought || 70} / <${p.underbought || 30}`
       if (type === 'ma_crossover') return `${p.crossover_type || 'golden'} cross ${p.short}/${p.long}`
       if (type === '52w') return `52w ${p.type || 'high'}`
       if (type === 'earnings_soon') return `Earnings ≤${p.days || 3} days`
@@ -113,7 +164,19 @@ export default function TabAlerts() {
 
   return (
     <div className="space-y-4">
-      <SectionHeader title="Alerts Manager" action={<button className="btn-primary" onClick={() => setShowAdd(true)}><Plus size={14} /> New Alert</button>} />
+      <SectionHeader title="Alerts Manager" action={
+        <div className="flex gap-2 items-center">
+          <div className="flex gap-1">
+            {[['manage', 'Alerts'], ['history', 'History']].map(([v, l]) => (
+              <button key={v} className={`btn text-xs px-3 py-1.5 ${view === v ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => setView(v)}>{l}</button>
+            ))}
+          </div>
+          <button className="btn-primary" onClick={() => setShowAdd(true)}><Plus size={14} /> New Alert</button>
+        </div>
+      } />
+
+      {view === 'history' ? <AlertHistory describeAlert={describeAlert} /> : <>
 
       {/* Filters */}
       <div className="card flex flex-wrap gap-3 items-center">
@@ -151,7 +214,9 @@ export default function TabAlerts() {
             <tbody>
               {paged.map((r, i) => (
                 <tr key={r.id ?? i} className="table-row">
-                  <td className="td font-medium text-xs">{r.symbol || '—'}</td>
+                  <td className="td font-medium text-xs">
+                    {r.symbol ? <button className="hover:text-accent-bright hover:underline" onClick={() => openTechnical(r.symbol)}>{r.symbol}</button> : '—'}
+                  </td>
                   <td className="td"><span className="badge bg-surface-3 text-gray-400 text-xs">{r.alert_type}</span></td>
                   <td className="td text-xs text-gray-400">{describeAlert(r.alert_type, r.params)}</td>
                   <td className="td text-xs text-gray-500">{r.note || '—'}</td>
@@ -178,6 +243,7 @@ export default function TabAlerts() {
           </div>
         </div>
       )}
+      </>}
 
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Create Alert" wide>
         <AlertForm securities={securities} onSubmit={data => createMut.mutate(data)} onClose={() => setShowAdd(false)} />

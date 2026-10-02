@@ -236,6 +236,32 @@ class TestAlertsAPI:
         assert r.status_code == 200
         assert api_client.get("/alerts").json() == []
 
+    def test_alert_history(self, api_client, db_path):
+        import db_utils as db
+        sec_id = seed_security(db_path, "BAYN.DE")
+        alert_id = api_client.post("/alerts", json={
+            "security_id": sec_id, "alert_type": "pct_change",
+            "params": {"pct": 5, "days": 1, "direction": "down"},
+        }).json()["id"]
+        assert api_client.get("/alerts/history").json() == []
+
+        db.log_alert_trigger(alert_id, {"note": "immediate", "detail": "-5.3% (47.95 → 45.40 EUR)"})
+        db.log_alert_trigger(alert_id, {"note": "digest_daily"})
+        rows = api_client.get("/alerts/history").json()
+        assert len(rows) == 2
+        assert rows[0]["delivery"] == "digest"           # newest first
+        assert rows[1]["detail"].startswith("-5.3%")
+        assert rows[1]["symbol"] == "BAYN.DE"
+        assert rows[1]["alert_type"] == "pct_change"
+
+    def test_telegram_test_requires_creds(self, api_client, monkeypatch):
+        monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+        monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+        import telegram_client as tg
+        monkeypatch.setattr(tg, "get_creds", lambda *a: ("", ""))
+        r = api_client.post("/settings/telegram-test")
+        assert r.status_code == 400
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Analytics

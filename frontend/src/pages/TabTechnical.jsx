@@ -1,4 +1,5 @@
 import { useState, lazy, Suspense } from 'react'
+import { useUrlParam } from '../lib/urlState'
 import { useQuery, useQueries } from '@tanstack/react-query'
 import { analyticsApi, securitiesApi } from '../lib/api'
 import { qk } from '../lib/queryClient'
@@ -303,7 +304,7 @@ function TechnicalCompare({ securities }) {
 }
 
 function TechnicalDeepDive({ securities }) {
-  const [symbol, setSymbol] = useState('')
+  const [symbol, setSymbol] = useUrlParam('symbol', '')
   const [lookback, setLookback] = useState(365)
   const [smaPeriods, setSmaPeriods] = useState([50, 200])
   const [emaPeriods, setEmaPeriods] = useState([])
@@ -521,7 +522,7 @@ function TechnicalDeepDive({ securities }) {
 }
 
 export default function TabTechnical() {
-  const [mode, setMode] = useState('deep-dive')
+  const [mode, setMode] = useUrlParam('mode', 'deep-dive')
   const { data: securities = [] } = useQuery({ queryKey: qk.securities(), queryFn: securitiesApi.list })
 
   return (

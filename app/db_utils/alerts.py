@@ -144,6 +144,27 @@ def get_alert_by_id(alert_id: int) -> Optional[Dict]:
     return df.iloc[0].to_dict() if not df.empty else None
 
 
+def get_alert_history(limit: int = 200, alert_id: Optional[int] = None) -> pd.DataFrame:
+    """Most recent alert triggers (newest first) with the security and what fired."""
+    where, args = "", []
+    if alert_id is not None:
+        where, args = "WHERE al.alert_id=?", [int(alert_id)]
+    args.append(int(limit))
+    return _read_sql(f"""
+        SELECT al.id, al.alert_id, al.triggered_at, al.payload,
+               a.alert_type, a.params, a.note, a.notify_mode, a.security_id,
+               s.yahoo_ticker AS symbol,
+               COALESCE(sc.longName, sc.shortName) AS security_name
+        FROM alerts_log al
+        JOIN alerts a ON a.id = al.alert_id
+        LEFT JOIN securities s ON s.id = a.security_id
+        LEFT JOIN securities_cache sc ON sc.security_id = a.security_id
+        {where}
+        ORDER BY al.triggered_at DESC
+        LIMIT ?
+    """, tuple(args))
+
+
 def get_alerts_for_digest(since_ts: str, notify_mode: str) -> List[Dict]:
     df = _read_sql("""
         SELECT al.alert_id, al.triggered_at, al.payload,

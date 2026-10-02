@@ -6,6 +6,7 @@ import argparse
 import logging
 import time
 import json
+from urllib.parse import urlencode
 import pandas as pd
 import middleware as mw
 from config_utils import get_config, set_config
@@ -24,10 +25,14 @@ def send_telegram(token: str, chat_id: str, text: str, max_retries: int = 3,
                   link: tuple | None = None) -> bool:
     return tg.send_message(token, chat_id, text, max_retries=max_retries, link=link)
 
-def _vestis_link(label: str = "🔎 Open in Vestis") -> tuple | None:
-    """(label, url) for the 'open Vestis' button, or None if no URL is configured."""
+def _vestis_link(label: str = "🔎 Open in Vestis", **params) -> tuple | None:
+    """(label, url) for the 'open Vestis' button, or None if no URL is configured.
+    params become the UI's query string, e.g. tab="technical", symbol="TSM"."""
     url = tg.get_vestis_url()
-    return (label, url) if url else None
+    if not url:
+        return None
+    query = urlencode({k: v for k, v in params.items() if v})
+    return (label, f"{url}/?{query}" if query else url)
 
 def _describe_alert(alert_type: str, params) -> str:
     try:
@@ -161,7 +166,8 @@ def run_immediate(cli_token=None, cli_chat=None):
         header = f"⚡ *Alert* — {label}"
         body = "\n".join([header] + [l for _, l, _ in fired_lines])
         body += f"\n\n_{now.strftime('%Y-%m-%d %H:%M UTC')}_"
-        if send_telegram(token, chat, body, link=_vestis_link()):
+        link = _vestis_link(f"🔎 Open {symbol} in Vestis", tab="technical", symbol=symbol)
+        if send_telegram(token, chat, body, link=link):
             for alert_id, _, al in fired_lines:
                 mw.log_trigger(alert_id, _log_payload(al, "immediate"))
                 mw.save_alert_state(al)
@@ -339,7 +345,7 @@ def send_digest(cli_token=None, cli_chat=None, freq="daily"):
 
     parts.append(f"_Generated {now.strftime('%Y-%m-%d %H:%M UTC')}_")
     body = "\n".join(parts)
-    if send_telegram(token, chat, body, link=_vestis_link()):
+    if send_telegram(token, chat, body, link=_vestis_link("🔔 Alert history in Vestis", tab="alerts", mode="history")):
         set_config(key, now.isoformat())
         logging.info("Digest (%s) sent", freq)
 
@@ -348,7 +354,8 @@ def test_telegram(cli_token=None, cli_chat=None):
     if not token or not chat:
         logging.error("Telegram token/chat not configured.")
         return
-    send_telegram(token, chat, "✅ *Vestis* — Telegram connection test successful!")
+    return send_telegram(token, chat, "✅ *Vestis* — Telegram connection test successful!",
+                         link=_vestis_link())
 
 def _ensure_alert(security_id, alert_type, params, note="",
                   notify_mode="immediate", cooldown_seconds=14400):

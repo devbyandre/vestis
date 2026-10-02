@@ -2,6 +2,8 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional
 
+import pandas as pd
+
 import middleware as mw
 
 from ._helpers import _df
@@ -15,6 +17,12 @@ def get_alerts(active_only: bool = False):
     if active_only:
         df = df[df["active"] == 1] if not df.empty else df
     return _df(df)
+
+@router.get("/alerts/history")
+def get_alert_history(limit: int = 200, alert_id: Optional[int] = None):
+    """Recently fired alerts, newest first."""
+    rows = mw.get_alert_history(limit=min(max(limit, 1), 1000), alert_id=alert_id)
+    return _df(pd.DataFrame(rows))
 
 class AlertCreate(BaseModel):
     security_id: int
