@@ -1,12 +1,19 @@
-streamlit==1.45.1
+# 1.45.1 pins pillow<12, which conflicts with the pillow>=12.2.0 CVE fix
+# below (unresolvable together) — bumped to the nearest version whose own
+# pillow pin allows it. Full test suite passes against 1.55.0.
+streamlit==1.55.0
 yfinance==0.2.61
 pandas==2.2.3
 numpy==1.26.4
-requests==2.32.3
+requests==2.34.2
 psycopg2-binary==2.9.10
 SQLAlchemy==2.0.40
 scipy==1.13.1
 plotly==5.24.1
 matplotlib==3.9.4
 beautifulsoup4==4.13.4
-lxml==5.3.2
+lxml==6.1.1
+# Transitive dep of matplotlib/streamlit — pinned directly since it's not
+# pinned by them and pip-audit flagged an older resolved version (CVEs
+# fixed in 12.2.0+).
+pillow>=12.2.0

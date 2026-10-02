@@ -5,7 +5,12 @@ import { qk } from '../lib/queryClient'
 import { fmt, plotlyConfig, distributionStats, normalPdf, linspace } from '../lib/utils'
 import { LoadingOverlay, ErrorMsg, MetricCard, SectionHeader, Expander, SortableTable } from '../components/ui'
 
-const Plot = lazy(() => import('react-plotly.js'))
+const Plot = lazy(() =>
+  // Vite's dev-mode CJS interop for this package can double-wrap the
+  // default export ({ default: { default: Component } }) depending on the
+  // bundler version — unwrap defensively so it works either way.
+  import('react-plotly.js').then(m => ({ default: m.default?.default ?? m.default }))
+)
 function LazyPlot(props) {
   return <Suspense fallback={<div className="text-gray-500 text-xs py-4">Loading chart…</div>}><Plot {...props} /></Suspense>
 }

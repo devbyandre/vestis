@@ -196,9 +196,12 @@ class TestModuleImports:
     """Each module should be importable without side-effects."""
 
     def _clean_import(self, module_name, monkeypatch, db_path):
+        # db_utils and middleware are packages — clearing just the top-level
+        # name doesn't cascade to already-imported submodules (db_utils.core,
+        # middleware.holdings etc.).
         for mod in list(sys.modules.keys()):
-            if mod in (module_name, "db_utils", "config_utils",
-                       "data_fetcher", "middleware"):
+            if (mod == module_name or mod in ("db_utils", "config_utils", "data_fetcher", "middleware")
+                    or mod.startswith("db_utils.") or mod.startswith("middleware.")):
                 monkeypatch.delitem(sys.modules, mod, raising=False)
         _patch_modules(monkeypatch, db_path)
         return importlib.import_module(module_name)
@@ -206,7 +209,9 @@ class TestModuleImports:
     def test_db_utils_imports(self, monkeypatch, tmp_path):
         db_path = _fresh_db(tmp_path)
         _patch_modules(monkeypatch, db_path)
-        monkeypatch.delitem(sys.modules, "db_utils", raising=False)
+        for mod in list(sys.modules):
+            if mod == "db_utils" or mod.startswith("db_utils."):
+                monkeypatch.delitem(sys.modules, mod, raising=False)
         import db_utils  # noqa
         assert hasattr(db_utils, "get_engine")
 
@@ -236,9 +241,13 @@ class TestDBInit:
         db_path = _fresh_db(tmp_path)
         _patch_modules(monkeypatch, db_path)
 
-        # Clear cached modules so db_init picks up the fresh DB
-        for mod in ["db_utils", "setup.db_init"]:
-            monkeypatch.delitem(sys.modules, mod, raising=False)
+        # Clear cached modules so db_init picks up the fresh DB. db_utils is
+        # a package now — clearing just the top-level name doesn't cascade
+        # to already-imported submodules (db_utils.core etc.), which would
+        # keep their _engine bound to whichever DB an earlier test used.
+        for mod in list(sys.modules):
+            if mod == "db_utils" or mod.startswith("db_utils.") or mod == "setup.db_init":
+                monkeypatch.delitem(sys.modules, mod, raising=False)
 
         from setup import db_init
         importlib.reload(db_init)
@@ -266,9 +275,11 @@ class TestDBInit:
     def test_default_portfolio_created(self, monkeypatch, tmp_path):
         db_path = _fresh_db(tmp_path)
         _patch_modules(monkeypatch, db_path)
-        # Clear and reimport
+        # Clear and reimport. db_utils is a package now — also drop already-
+        # imported submodules (db_utils.core etc.), or their _engine would
+        # stay bound to whichever DB an earlier test used.
         for mod in list(sys.modules.keys()):
-            if "db_init" in mod or mod == "db_utils":
+            if "db_init" in mod or mod == "db_utils" or mod.startswith("db_utils."):
                 monkeypatch.delitem(sys.modules, mod, raising=False)
         import importlib.util, os
         spec = importlib.util.spec_from_file_location(
@@ -305,9 +316,15 @@ class TestStreamlitSmoke:
 
         # Remove cached app module to force a fresh import
         monkeypatch.delitem(sys.modules, "app_streamlit", raising=False)
-        # Also clear db_utils / middleware so they pick up the temp DB
-        for mod in ["db_utils", "middleware"]:
-            monkeypatch.delitem(sys.modules, mod, raising=False)
+        # Also clear db_utils / middleware so they pick up the temp DB.
+        # Both are packages now — clearing just the top-level name doesn't
+        # cascade to already-imported submodules (db_utils.core,
+        # middleware.holdings etc.), which would keep querying whichever DB
+        # an earlier test (e.g. one using the api_client fixture) had set up.
+        for mod in list(sys.modules):
+            if (mod in ("db_utils", "middleware")
+                    or mod.startswith("db_utils.") or mod.startswith("middleware.")):
+                monkeypatch.delitem(sys.modules, mod, raising=False)
 
         # This should NOT raise
         try:
@@ -327,11 +344,12 @@ class TestStreamlitSmoke:
         """Key middleware functions exist and are callable (not just importable)."""
         db_path = _fresh_db(tmp_path)
         _patch_modules(monkeypatch, db_path)
-        for mod in ["db_utils", "middleware"]:
-            monkeypatch.delitem(sys.modules, mod, raising=False)
+        for mod in list(sys.modules):
+            if (mod in ("db_utils", "middleware")
+                    or mod.startswith("db_utils.") or mod.startswith("middleware.")):
+                monkeypatch.delitem(sys.modules, mod, raising=False)
 
         import middleware as mw
-        importlib.reload(mw)
 
         for fn_name in [
             "list_portfolios", "get_all_symbols", "get_alerts",
@@ -344,10 +362,11 @@ class TestStreamlitSmoke:
         """Key db_utils functions exist and are callable."""
         db_path = _fresh_db(tmp_path)
         _patch_modules(monkeypatch, db_path)
-        monkeypatch.delitem(sys.modules, "db_utils", raising=False)
+        for mod in list(sys.modules):
+            if mod == "db_utils" or mod.startswith("db_utils."):
+                monkeypatch.delitem(sys.modules, mod, raising=False)
 
         import db_utils as db
-        importlib.reload(db)
 
         for fn_name in [
             "get_engine", "list_portfolios", "insert_security",

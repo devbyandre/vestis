@@ -60,38 +60,6 @@ export const temperatureBadgeClass = (t) => {
   return 'bg-surface-3 text-gray-500'
 }
 
-// Plotly dark theme config
-export const plotlyLayout = (overrides = {}) => ({
-  paper_bgcolor: 'transparent',
-  plot_bgcolor: 'transparent',
-  font: { color: '#9ca3af', family: 'Inter var, Inter, system-ui, sans-serif', size: 12 },
-  xaxis: {
-    gridcolor: '#1a1a24',
-    linecolor: '#2a2a3a',
-    tickcolor: '#2a2a3a',
-    ...overrides.xaxis,
-  },
-  yaxis: {
-    gridcolor: '#1a1a24',
-    linecolor: '#2a2a3a',
-    tickcolor: '#2a2a3a',
-    ...overrides.yaxis,
-  },
-  margin: { l: 50, r: 20, t: 40, b: 40, ...(overrides.margin || {}) },
-  hovermode: 'x unified',
-  hoverlabel: {
-    bgcolor: '#1a1a24',
-    bordercolor: '#2a2a3a',
-    font: { color: '#e5e7eb', size: 12 },
-  },
-  legend: {
-    bgcolor: 'transparent',
-    font: { color: '#9ca3af' },
-    ...overrides.legend,
-  },
-  ...overrides,
-})
-
 export const plotlyConfig = {
   displayModeBar: true,
   displaylogo: false,

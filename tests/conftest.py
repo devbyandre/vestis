@@ -22,6 +22,20 @@ for _p in (APP_DIR, API_DIR):
         sys.path.insert(0, os.path.abspath(_p))
 
 
+def _pop_package_modules(*prefixes):
+    """
+    Remove a package and all its already-imported submodules from
+    sys.modules. Needed for any package (db_utils, routers, ...) whose
+    __init__.py does `from .submodule import X` — reload()/re-import of just
+    the top-level name doesn't cascade to submodules already cached from a
+    previous test, so they'd keep pointing at that test's stale bindings
+    (e.g. db_utils.core's _engine bound to the previous test's DATABASE_URL).
+    """
+    for mod in list(sys.modules):
+        if any(mod == p or mod.startswith(p + ".") for p in prefixes):
+            sys.modules.pop(mod, None)
+
+
 def apply_schema(conn):
     """Create all tables from the canonical DDL (mirrors setup/db_init.py)."""
     conn.executescript("""
@@ -227,11 +241,9 @@ def db(db_path, monkeypatch):
     """
     _patch_config_and_env(db_path, monkeypatch)
 
-    if "db_utils" in sys.modules:
-        del sys.modules["db_utils"]
+    _pop_package_modules("db_utils")
 
     import db_utils as _db
-    importlib.reload(_db)
     return _db
 
 
@@ -243,10 +255,15 @@ def api_client(db_path, monkeypatch):
     to the patched DATABASE_URL — middleware must be (re)imported before
     data_fetcher due to their circular import (data_fetcher imports
     middleware; middleware imports fetch_and_store_lazy from data_fetcher).
+    Also drops routers.* — each router module does its own
+    `import middleware as mw` at load time, so a cached router module from a
+    previous test would keep pointing at that test's (stale) middleware
+    instance rather than the one just re-imported above.
     """
     _patch_config_and_env(db_path, monkeypatch)
 
-    for mod in ("api_main", "middleware", "data_fetcher", "db_utils"):
+    _pop_package_modules("routers", "db_utils", "middleware")
+    for mod in ("api_main", "data_fetcher"):
         sys.modules.pop(mod, None)
 
     import middleware  # noqa: F401 — establishes the safe import order
@@ -269,8 +286,8 @@ def mw(db_path, monkeypatch):
     """
     _patch_config_and_env(db_path, monkeypatch)
 
-    for mod in ("middleware", "data_fetcher", "db_utils"):
-        sys.modules.pop(mod, None)
+    _pop_package_modules("db_utils", "middleware")
+    sys.modules.pop("data_fetcher", None)
 
     import middleware as _mw
     return _mw

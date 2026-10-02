@@ -5,7 +5,12 @@ import { qk } from '../lib/queryClient'
 import { fmt, pnlColor, plotlyConfig } from '../lib/utils'
 import { LoadingOverlay, ErrorMsg, SortableTable, SectionHeader, MetricCard, Expander } from '../components/ui'
 
-const Plot = lazy(() => import('react-plotly.js'))
+const Plot = lazy(() =>
+  // Vite's dev-mode CJS interop for this package can double-wrap the
+  // default export ({ default: { default: Component } }) depending on the
+  // bundler version — unwrap defensively so it works either way.
+  import('react-plotly.js').then(m => ({ default: m.default?.default ?? m.default }))
+)
 const BASE = {
   paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
   font: { color: '#9ca3af', size: 11 }, margin: { l: 60, r: 20, t: 40, b: 60 },

@@ -413,7 +413,11 @@ class TestEvaluateAlert:
     """
 
     def _eval(self, monkeypatch, alert, market_data: dict) -> bool:
-        monkeypatch.setattr(mw, "fetch_symbol_data", lambda sym: market_data)
+        # evaluate_alert calls fetch_symbol_data() as a same-module global
+        # lookup inside middleware/alerts.py — patching mw.fetch_symbol_data
+        # (the package-level re-export) wouldn't affect that lookup, since
+        # it's a separate name binding. Patch the owning submodule instead.
+        monkeypatch.setattr(mw.alerts, "fetch_symbol_data", lambda sym: market_data)
         # Patch db.get_price_history to return synthetic data matching market_data
         import db_utils as _db
         sma_data = market_data.get("sma", {})
@@ -540,7 +544,10 @@ class TestCalcCapitalGainsFIFO:
 
     def _make_tx(self, monkeypatch, rows):
         df = pd.DataFrame(rows)
-        monkeypatch.setattr(mw, "list_transactions", lambda pids=None: df)
+        # calc_capital_gains_fifo calls list_transactions() as a name bound
+        # inside middleware/revenues.py (`from .transactions import
+        # list_transactions`) — patch it there, not on the mw package itself.
+        monkeypatch.setattr(mw.revenues, "list_transactions", lambda pids=None: df)
 
     def test_simple_buy_sell_profit(self, monkeypatch):
         self._make_tx(monkeypatch, [
@@ -601,7 +608,7 @@ class TestCalcCapitalGainsFIFO:
         assert result_2023.iloc[0]["profit"] == pytest.approx(150.0)
 
     def test_empty_transactions(self, monkeypatch):
-        monkeypatch.setattr(mw, "list_transactions", lambda pids=None: pd.DataFrame())
+        monkeypatch.setattr(mw.revenues, "list_transactions", lambda pids=None: pd.DataFrame())
         result = mw.calc_capital_gains_fifo()
         assert result.empty
 
@@ -615,7 +622,7 @@ class TestCalcDividends:
 
     def _setup(self, monkeypatch, tx_rows, div_rows_by_symbol):
         tx_df = pd.DataFrame(tx_rows)
-        monkeypatch.setattr(mw, "list_transactions", lambda pids=None: tx_df)
+        monkeypatch.setattr(mw.revenues, "list_transactions", lambda pids=None: tx_df)
 
         # Patch get_dividends on the db module that middleware has already imported
         def fake_get_dividends(sym):

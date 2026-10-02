@@ -397,6 +397,25 @@ class TestPlanningAPI:
         r = api_client.get("/planning/allocation-over-time", params={"group_by": "nonsense"})
         assert r.status_code == 400
 
+    def test_allocation_over_time_all_matches_individual_calls(self, api_client, db_path):
+        self._seed_holding(api_client, db_path)
+        combined = api_client.get("/planning/allocation-over-time-all").json()
+        assert set(combined.keys()) == {"security_type", "sector", "industry", "symbol"}
+        for group_by in combined:
+            individual = api_client.get(
+                "/planning/allocation-over-time", params={"group_by": group_by}
+            ).json()
+            assert combined[group_by] == individual
+
+    def test_allocation_over_time_all_empty_when_no_holdings(self, api_client):
+        combined = api_client.get("/planning/allocation-over-time-all").json()
+        assert combined == {
+            "security_type": {"dates": [], "series": {}},
+            "sector": {"dates": [], "series": {}},
+            "industry": {"dates": [], "series": {}},
+            "symbol": {"dates": [], "series": {}},
+        }
+
     def test_risk_over_time_detailed_includes_category_columns(self, api_client, db_path):
         # risk_score needs a 252-day rolling std with min_periods=20, so the
         # single-price-row seed the other tests use isn't enough here.

@@ -30,6 +30,7 @@ export const qk = {
   revenuesSummary: (ids, year) => ['analytics', 'revenues-summary', ids, year],
   rebalancing: (ids, ry) => ['planning', 'rebalancing', ids, ry],
   allocationOverTime: (ids, groupBy = 'security_type') => ['planning', 'allocation-over-time', ids, groupBy],
+  allocationOverTimeAll: (ids) => ['planning', 'allocation-over-time-all', ids],
   riskOverTime: (ids, aggregate = true) => ['planning', 'risk-over-time', ids, aggregate],
   taxonomy: () => ['planning', 'taxonomy'],
   capitalGains: (ids, year) => ['analytics', 'capital-gains', ids, year],

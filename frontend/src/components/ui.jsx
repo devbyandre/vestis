@@ -17,15 +17,6 @@ export function LoadingOverlay({ label = 'Loading...' }) {
   )
 }
 
-export function InlineLoader() {
-  return (
-    <div className="flex items-center gap-2 text-gray-500 text-sm py-4">
-      <Spinner size={14} />
-      <span>Loading…</span>
-    </div>
-  )
-}
-
 // ── Error ─────────────────────────────────────────────────────────────────────
 
 export function ErrorMsg({ error, label = 'Failed to load data' }) {
@@ -331,30 +322,6 @@ export function Input({ label: lbl, value, onChange, type = 'text', placeholder,
         max={max}
         step={step}
       />
-    </div>
-  )
-}
-
-// ── Tabs ──────────────────────────────────────────────────────────────────────
-
-export function TabBar({ tabs, active, onChange }) {
-  return (
-    <div className="flex gap-1 overflow-x-auto pb-1">
-      {tabs.map(t => (
-        <button
-          key={t.id}
-          onClick={() => onChange(t.id)}
-          className={clsx(
-            'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all',
-            active === t.id
-              ? 'bg-accent/15 text-accent-bright border border-accent/30'
-              : 'text-gray-500 hover:text-gray-300 hover:bg-surface-2'
-          )}
-        >
-          {t.icon && <span>{t.icon}</span>}
-          {t.label}
-        </button>
-      ))}
     </div>
   )
 }

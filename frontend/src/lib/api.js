@@ -107,6 +107,8 @@ export const planningApi = {
     get('/analytics/rebalancing', { portfolio_ids: portfolio_ids?.join(','), retirement_year }),
   allocationOverTime: (portfolio_ids, group_by = 'security_type') =>
     get('/planning/allocation-over-time', { portfolio_ids: portfolio_ids?.join(','), group_by }),
+  allocationOverTimeAll: (portfolio_ids) =>
+    get('/planning/allocation-over-time-all', { portfolio_ids: portfolio_ids?.join(',') }),
   riskOverTime: (portfolio_ids, aggregate = true) =>
     get('/planning/risk-over-time', { portfolio_ids: portfolio_ids?.join(','), aggregate }),
 }

@@ -3,6 +3,9 @@
 .env.*
 !.env.example
 !.env.dev.example
+# Root-level runtime config mounted by docker-compose.yaml (./config.json) —
+# not the tracked app/config.json defaults schema.
+/config.json
 
 # ── Database files ──────────────────────────────────────────────────────────
 *.db

@@ -1,0 +1,25 @@
+from fastapi import APIRouter
+from pydantic import BaseModel
+
+from config_utils import get_all_config, set_config
+
+router = APIRouter(tags=["settings"])
+
+
+@router.get("/settings")
+def get_settings():
+    cfg = get_all_config()
+    # Never expose secrets in GET — mask them
+    safe = {k: v for k, v in cfg.items() if k not in ("telegram_bot_token", "telegram_chat_id")}
+    safe["telegram_bot_token_set"] = bool(cfg.get("telegram_bot_token"))
+    safe["telegram_chat_id_set"] = bool(cfg.get("telegram_chat_id"))
+    return safe
+
+class SettingsUpdate(BaseModel):
+    settings: dict
+
+@router.put("/settings")
+def update_settings(body: SettingsUpdate):
+    for key, value in body.settings.items():
+        set_config(key, value)
+    return {"ok": True}

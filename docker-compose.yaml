@@ -43,8 +43,9 @@ services:
     depends_on:
       db-init:
         condition: service_completed_successfully
-    ports:
-      - "${APP_PORT:-8501}:8501"
+    # No published host port — reachable only via Traefik (below), which
+    # keeps Authentik in front of it. Publishing directly to the host
+    # bypasses Authentik entirely for anyone who can reach that port.
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-stockapp}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-stockapp}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
@@ -54,12 +55,12 @@ services:
     labels:
       - coolify.managed=true  # keep existing coolify labels
       - traefik.enable=true
-      - traefik.http.routers.vestis.rule=Host(`vestis.homeserver.local`)
-      - traefik.http.routers.vestis.entrypoints=https
-      - traefik.http.routers.vestis.tls=true
-      - traefik.http.routers.vestis.middlewares=authentik@file
-      - traefik.http.routers.vestis.priority=100
-      - traefik.http.services.vestis.loadbalancer.server.port=8501
+      - traefik.http.routers.vestis-legacy.rule=Host(`old.vestis.homeserver.local`)
+      - traefik.http.routers.vestis-legacy.entrypoints=https
+      - traefik.http.routers.vestis-legacy.tls=true
+      - traefik.http.routers.vestis-legacy.middlewares=authentik@file
+      - traefik.http.routers.vestis-legacy.priority=100
+      - traefik.http.services.vestis-legacy.loadbalancer.server.port=8501
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
       interval: 30s
@@ -116,8 +117,11 @@ services:
       PYTHONPATH: /app
     volumes:
       - ./data:/data
-    ports:
-      - "8505:8503"
+    # No published host port — this API has no auth of its own and is only
+    # ever meant to be reached internally by the frontend's nginx reverse
+    # proxy (see nginx.conf's proxy_pass to api:8503 over coolify_net/default).
+    # Publishing it to the host exposed full unauthenticated read/write
+    # access to portfolio data to anyone on the LAN/host network.
     networks:
       - coolify_net
       - default
@@ -129,13 +133,22 @@ services:
       context: .
       dockerfile: Dockerfile.frontend
     restart: unless-stopped
-    ports:
-      - "8504:8504"
+    # No published host port — reachable only via Traefik (below), same
+    # reasoning as the `app` service above.
     networks:
       - coolify_net
       - default
     depends_on:
       - api
+    labels:
+      - coolify.managed=true
+      - traefik.enable=true
+      - traefik.http.routers.vestis.rule=Host(`vestis.homeserver.local`)
+      - traefik.http.routers.vestis.entrypoints=https
+      - traefik.http.routers.vestis.tls=true
+      - traefik.http.routers.vestis.middlewares=authentik@file
+      - traefik.http.routers.vestis.priority=100
+      - traefik.http.services.vestis.loadbalancer.server.port=8504
 
 volumes:
   pgdata:

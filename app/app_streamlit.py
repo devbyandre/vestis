@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 # app_streamlit.py
-import os, json, datetime as dt
+import json, datetime as dt
 import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from scipy.stats import skew, kurtosis, norm
-import matplotlib.pyplot as plt
-from typing import List
 
 import middleware as mw
 import db_utils as db
@@ -1648,61 +1646,6 @@ with tabs[2]:
 
             st.dataframe(styled, use_container_width=True)
 
-        # def display_rebalance_table(rebalance_results):
-        #     if not rebalance_results or "suggestions" not in rebalance_results:
-        #         st.info("No recommendations available.")
-        #         return
-
-        #     suggestions = rebalance_results["suggestions"]
-        #     df = pd.DataFrame(suggestions)
-        #     if df.empty:
-        #         st.info("No rebalancing actions needed.")
-        #         return
-
-        #     df["Symbol"] = df["symbol"].apply(format_sec_label)
-        #     df["Reason"] = df["reasons"].apply(lambda x: "; ".join(x))
-        #     df["Action"] = df["pct_change"].apply(lambda x: "Increase" if x > 0 else ("Reduce" if x < 0 else "Hold"))
-        #     df["% Change"] = df["pct_change"].apply(lambda x: abs(x)*100)
-        #     df["€ Change"] = df["market_value_change"]
-        #     df["Priority"] = df["priority_score"]
-        #     df["Impact Allocation"] = df["impact_allocation"]
-        #     df["Impact Risk"] = df["impact_risk"]
-
-        #     display_cols = ["Symbol", "Action", "% Change", "€ Change", "Reason",
-        #                     "Impact Allocation", "Impact Risk", "Priority"]
-        #     df_display = df[display_cols]
-
-        #     # --- Styling functions ---
-        #     def color_pct(val):
-        #         # gradient from light gray to green/red
-        #         if val > 0:
-        #             return "background-color: #4CAF50; color: white; font-weight: bold"  # strong green
-        #         elif val < 0:
-        #             return "background-color: #f44336; color: white; font-weight: bold"  # strong red
-        #         else:
-        #             return "background-color: #dcdcdc; color: #222; font-weight: bold"  # gray for Hold
-
-        #     def color_priority(val):
-        #         return "color: #222; font-weight: bold; background-color: #f0f0f0"
-
-        #     styled = (
-        #         df_display.style
-        #         .format({
-        #             "% Change": "{:.2f}%",
-        #             "€ Change": "€{:,.0f}",
-        #             "Impact Allocation": "{:.2%}",
-        #             "Impact Risk": "{:.2%}",
-        #             "Priority": "{:.2f}"
-        #         })
-        #         .map(color_pct, subset=["% Change"])
-        #         # .map(color_priority, subset=["Priority"])
-        #         .set_properties(**{"font-family": "Arial, sans-serif", "font-size": "12pt"})
-        #     )
-
-        #     df_display = df_display.sort_values(by="Priority", ascending=False)
-
-        #     st.dataframe(styled, use_container_width=True)
-
         display_rebalance_table(rebalance)
 
     else:
@@ -2144,172 +2087,9 @@ with tabs[3]:
 
 
 
-    # # --- KPIs for selected security (second section) ---
-    # selected_label = st.selectbox(
-    #     "Select security for KPI table (leave blank for none)",
-    #     options=[""] + list(sec_label_map.keys()),
-    #     key="kpi_select_sym"
-    # )
-
-    # if selected_label:
-    #     kpi_sym = sec_label_map[selected_label]
-    #     data = mw.get_security_basic(kpi_sym)
-
-    #     st.title(f"📈 Securities Overview — {kpi_sym}")
-    #     st.markdown(f"**{data.get('longName','')}**")
-
-    #     # --- Risk & Performance KPIs ---
-    #     with st.expander("Risk & Performance KPIs", expanded=True):
-    #         for sym, dfp in series_map.items():
-    #             lbl = format_sec_label(sym)
-    #             dfp_sel = dfp.loc[start:end]
-
-    #             vol = mw.volatility(dfp_sel)
-    #             max_dd = mw.max_drawdown(dfp_sel['close'])
-    #             sharpe = mw.sharpe_ratio(dfp_sel)
-    #             sortino = mw.sortino_ratio(dfp_sel)
-    #             cagr = mw.cagr(dfp_sel)
-    #             calmar = mw.calmar_ratio(dfp_sel)
-    #             treynor = mw.treynor_ratio(dfp_sel)
-
-    #             if 'benchmark_df' in locals() and benchmark_df is not None:
-    #                 # For Info Ratio, pass a benchmark df (e.g. market index)
-    #                 info_ratio = mw.information_ratio(dfp_sel, benchmark_df)
-    #             else:
-    #                 info_ratio = np.nan
-                
-    #             st.markdown(f"### {lbl}")
-
-    #             col1, col2, col3, col4 = st.columns(4)
-    #             col1.metric("Volatility", f"{vol:.2%}", "Lower is safer")
-    #             col2.metric("Sharpe Ratio", f"{sharpe:.2f}", ">1 good, >2 very good")
-    #             col3.metric("Sortino Ratio", f"{sortino:.2f}", ">1 good, >2 very good")
-    #             col4.metric("Max Drawdown", f"{max_dd:.2%}", "Lower is better")
-
-    #             col5, col6, col7, col8 = st.columns(4)
-    #             col5.metric("CAGR", f"{cagr:.2%}", "Positive = growth")
-    #             col6.metric("Calmar Ratio", f"{calmar:.2f}", ">0.5 decent, >1 strong")
-    #             col7.metric("Treynor Ratio", f"{treynor:.2f}", "Higher is better")
-    #             col8.metric("Info Ratio", f"{info_ratio:.2f}", ">0.5 good, >1 very good")
-
-    #     # MARKET DATA
-    #     with st.expander("Market Data", expanded=True):
-    #         low = data.get("fiftyTwoWeekLow")
-    #         high = data.get("fiftyTwoWeekHigh")
-    #         current = data.get("regularMarketPrice")
-    #         if all(v is not None for v in (low, high, current)):
-    #             cols = st.columns(3)
-    #             cols[0].metric("52W Low", f"€{fmt_number(low,2)}")
-    #             cols[1].metric("Price", f"€{fmt_number(current,2)}")
-    #             cols[2].metric("52W High", f"€{fmt_number(high,2)}")
-
-    #     # --- DIVIDENDS ---
-    #     with st.expander("Dividends", expanded=False):
-    #         cols = st.columns(2)
-    #         cols[0].metric("Dividend Rate", fmt_number(data.get('dividendRate'),2))
-    #         cols[1].metric("Dividend Yield", fmt_number(data.get('dividendYield'),2, percent=True))
-
-    #     # --- VALUATION ---
-    #     with st.expander("Valuation", expanded=False):
-    #         cols = st.columns(3)
-    #         cols[0].metric("Trailing PE", fmt_number(data.get('trailingPE'),2))
-    #         cols[1].metric("Forward PE", fmt_number(data.get('forwardPE'),2))
-    #         cols[2].metric("Enterprise Value", fmt_number(data.get('enterpriseValue')))
-
-    #         cols = st.columns(2)
-    #         cols[0].metric("Profit Margin", fmt_number(data.get('profitMargins'),2, percent=True))
-    #         cols[1].metric("Operating Margin", fmt_number(data.get('operatingMargins'),2, percent=True))
-
-    #     # --- REVENUE & PROFITS ---
-    #     with st.expander("Revenue & Profits", expanded=False):
-    #         st.metric("Total Revenue", fmt_number(data.get('totalRevenue')))
-    #         cols = st.columns(2)
-    #         cols[0].metric("Revenue per Share", fmt_number(data.get('revenuePerShare'),2))
-    #         cols[1].metric("Gross Profits", fmt_number(data.get('grossProfits')))
-    #         st.metric("EBITDA", fmt_number(data.get('ebitda')))
-
-    #     # --- BALANCE SHEET ---
-    #     with st.expander("Balance Sheet", expanded=False):
-    #         cols = st.columns(4)
-    #         cols[0].metric("Total Cash", fmt_number(data.get('totalCash')))
-    #         cols[1].metric("Total Debt", fmt_number(data.get('totalDebt')))
-    #         cols[2].metric("Current Ratio", fmt_number(data.get('currentRatio'),2))
-    #         cols[3].metric("Book Value", fmt_number(data.get('bookValue'),2))
-
-    #     # --- CASH FLOW ---
-    #     with st.expander("Cash Flow", expanded=False):
-    #         cols = st.columns(2)
-    #         cols[0].metric("Operating Cash Flow", fmt_number(data.get('operatingCashflow')))
-    #         cols[1].metric("Free Cash Flow", fmt_number(data.get('freeCashflow')))
-
-    #     # --- SHARES ---
-    #     with st.expander("Shares", expanded=False):
-    #         cols = st.columns(2)
-    #         cols[0].metric("Shares Outstanding", fmt_number(data.get('sharesOutstanding')))
-    #         cols[1].metric("Market Cap", fmt_number(data.get('marketCap')))
-
 # ---------- NEWS & SENTIMENT ----------
 with tabs[4]:
     st.info("Coming soon...")
-#     st.header("News & Sentiment")
-#     st.info("Portfolio-level sentiment overview and per-symbol deep dive.")
-#     p_df = pd.read_sql_query("SELECT id,name FROM portfolios ORDER BY name", conn)
-#     all_names = p_df['name'].tolist() if not p_df.empty else []
-#     sel_ports = st.multiselect("Select portfolios (default=All)", options=all_names, default=all_names, key="news_pf_sel")
-#     port_ids = [int(p_df[p_df['name']==n]['id'].iloc[0]) for n in sel_ports] if sel_ports else None
-#     syms = set()
-#     try:
-#         for r in conn.execute("SELECT symbol FROM securities WHERE watchlist=1"):
-#             syms.add(r[0])
-#     except Exception: pass
-#     try:
-#         if port_ids:
-#             for pid in port_ids:
-#                 for r in conn.execute("SELECT DISTINCT symbol FROM transactions WHERE portfolio_id=?", (pid,)):
-#                     syms.add(r[0])
-#         else:
-#             for r in conn.execute("SELECT DISTINCT symbol FROM transactions"):
-#                 syms.add(r[0])
-#     except Exception: pass
-#     syms = sorted([s for s in syms if s])
-#     if not syms:
-#         st.info("No symbols in selection")
-#     else:
-#         rows=[]
-#         for s in syms:
-#             q = conn.execute("SELECT sentiment_label,sentiment_score FROM news WHERE symbol=?", (s,))
-#             items = q.fetchall()
-#             total = len(items)
-#             pos = sum(1 for it in items if it['sentiment_label']=='positive')
-#             neu = sum(1 for it in items if it['sentiment_label']=='neutral')
-#             neg = sum(1 for it in items if it['sentiment_label']=='negative')
-#             avg = None
-#             scores = [float(it['sentiment_score']) for it in items if it['sentiment_score'] is not None]
-#             if scores:
-#                 avg = sum(scores)/len(scores)
-#             label = 'neutral'
-#             if avg is not None:
-#                 label = 'positive' if avg>=0.05 else ('negative' if avg<=-0.05 else 'neutral')
-#             rows.append({'symbol': s, 'total': total, 'positive': pos, 'neutral': neu, 'negative': neg, 'avg': avg, 'label': label})
-#         df_sent = pd.DataFrame(rows).sort_values('total', ascending=False)
-#         st.dataframe(df_sent[['symbol','total','positive','neutral','negative','avg','label']], use_container_width=True)
-#         sel_sym = st.selectbox("Select symbol for articles", options=[""] + df_sent['symbol'].tolist(), key="news_sel_sym")
-#         if sel_sym:
-#             news_df = pd.read_sql_query("SELECT id,title,publisher,link,published_at,sentiment_score,sentiment_label,article_text FROM news WHERE symbol=? ORDER BY published_at DESC LIMIT ?", conn, params=(sel_sym, int(CFG.get('news_max_items',50))))
-#             if news_df.empty:
-#                 st.info("No news for this symbol")
-#             else:
-#                 for idx, row in news_df.iterrows():
-#                     label = row['sentiment_label'] or 'N/A'; score = row['sentiment_score']; title = row['title'] or "(no title)"
-#                     emoji = "👍" if label=='positive' else ("😐" if label=='neutral' else "👎")
-#                     with st.expander(f"{emoji} {title} — {label} ({score})", expanded=False):
-#                         st.markdown(f"**Publisher:** {row['publisher']}  \n**Date:** {row['published_at']}")
-#                         if row['link']:
-#                             st.markdown(f"[Open original]({row['link']})")
-#                         if row['article_text']:
-#                             st.text_area("Article text", value=row['article_text'], height=260, key=f"art_{sel_sym}_{idx}")
-#                         else:
-#                             st.write("No extracted article text available.")
 
 # ---------- TRANSACTIONS ----------
 with tabs[5]:
@@ -2887,40 +2667,6 @@ with tabs[7]:
         df_filtered = df_filtered.iloc[(al_page-1)*ALERT_PAGE_SIZE : al_page*ALERT_PAGE_SIZE].copy()
 
         # --- Alerts List in expander ---
-        # with st.expander("Alerts List", expanded=True):
-        #     for idx, row in df_filtered.iterrows():
-        #         if idx > 0:  # skip divider for first alert
-        #             st.divider()
-                
-        #         sec_label = format_sec_label(row['symbol'])
-        #         st.markdown(f"### {sec_label}")  # Full-width title
-
-        #         # Fields below title
-        #         cols = st.columns([1,1,1,1,1,1,1])
-        #         cols[0].markdown(f"**Type:** {row['alert_type']}")
-        #         cols[1].markdown(f"**Active:** {'✅' if row['active'] else '❌'}")
-        #         cols[2].markdown(f"**Notify:** {row['notify_mode']}")
-        #         cols[3].markdown(f"**Cooldown:** {row['cooldown_seconds']}s")
-        #         cols[4].markdown(f"**Last triggered:** {row['last_triggered'] or '—'}")
-        #         cols[5].markdown(f"**Note:** {row.get('note','—')}")
-
-        #         # Display thresholds / parameters
-        #         params = json.loads(row["params"]) if isinstance(row["params"], str) else row["params"] or {}
-        #         if params:
-        #             param_str = ", ".join(f"{k}={v}" for k, v in params.items())
-        #             st.markdown(f"**Thresholds / Parameters:** {param_str}")
-
-        #         # Action buttons with unique keys
-        #         bcols = st.columns([1,1])
-        #         if bcols[0].button("✏️ Edit", key=f"edit_{row['id']}_{idx}"):
-        #             st.session_state['edit_alert_id'] = row['id']
-        #             st.rerun()
-        #         if bcols[1].button("🗑️ Delete", key=f"delete_{row['id']}_{idx}"):
-        #             mw.delete_alert(row['id'])
-        #             st.warning("Alert deleted")
-        #             st.rerun()
-
-        # --- Alerts List in expander (replace your existing loop with this) ---
         with st.expander("Alerts List", expanded=True):
             if df_filtered.empty:
                 st.info("No alerts to show.")

@@ -6,7 +6,12 @@ import { qk } from '../lib/queryClient'
 import { fmt, pnlColor, plotlyConfig, clamp } from '../lib/utils'
 import { LoadingOverlay, ErrorMsg, SortableTable, SectionHeader, Expander, Input, MetricCard } from '../components/ui'
 
-const Plot = lazy(() => import('react-plotly.js'))
+const Plot = lazy(() =>
+  // Vite's dev-mode CJS interop for this package can double-wrap the
+  // default export ({ default: { default: Component } }) depending on the
+  // bundler version — unwrap defensively so it works either way.
+  import('react-plotly.js').then(m => ({ default: m.default?.default ?? m.default }))
+)
 function LazyPlot(props) {
   return <Suspense fallback={<div className="text-gray-500 text-xs py-4">Loading chart…</div>}><Plot {...props} /></Suspense>
 }
@@ -380,10 +385,14 @@ export default function TabPlanning() {
 
   const { data: kpisRaw = [], isLoading, error } = useQuery({ queryKey: qk.kpis(ids), queryFn: () => planningApi.kpis(ids) })
   const { data: rebalancing } = useQuery({ queryKey: qk.rebalancing(ids, retirementYear), queryFn: () => planningApi.rebalancing(ids, retirementYear) })
-  const { data: allocTime } = useQuery({ queryKey: qk.allocationOverTime(ids, 'security_type'), queryFn: () => planningApi.allocationOverTime(ids, 'security_type') })
-  const { data: sectorTime } = useQuery({ queryKey: qk.allocationOverTime(ids, 'sector'), queryFn: () => planningApi.allocationOverTime(ids, 'sector') })
-  const { data: industryTime } = useQuery({ queryKey: qk.allocationOverTime(ids, 'industry'), queryFn: () => planningApi.allocationOverTime(ids, 'industry') })
-  const { data: symbolTime } = useQuery({ queryKey: qk.allocationOverTime(ids, 'symbol'), queryFn: () => planningApi.allocationOverTime(ids, 'symbol') })
+  // One request computing all 4 groupings server-side from a single shared
+  // holdings-timeseries fetch, instead of 4 separate round trips that each
+  // redundantly re-fetch and re-process the same underlying data.
+  const { data: allocAll } = useQuery({ queryKey: qk.allocationOverTimeAll(ids), queryFn: () => planningApi.allocationOverTimeAll(ids) })
+  const allocTime = allocAll?.security_type
+  const sectorTime = allocAll?.sector
+  const industryTime = allocAll?.industry
+  const symbolTime = allocAll?.symbol
   const { data: riskTime = [] } = useQuery({ queryKey: qk.riskOverTime(ids, true), queryFn: () => planningApi.riskOverTime(ids, true) })
   const { data: riskDetailedRaw = [] } = useQuery({ queryKey: qk.riskOverTime(ids, false), queryFn: () => planningApi.riskOverTime(ids, false) })
 
