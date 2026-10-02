@@ -880,8 +880,10 @@ class TestPricesDue:
             "data_fetcher_real", os.path.join(APP_DIR, "data_fetcher.py"))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        monkeypatch.setattr(mod, "get_config", lambda k: 22 if k == "price_refresh_hour_utc" else None)
+        monkeypatch.setattr(mod, "get_config", lambda k: {"price_refresh_hour_utc": 22, "price_refresh_minutes": 60}.get(k))
         self.due = mod.prices_due
+        self.refresh_due = mod.price_refresh_due
+        self.fx_due = mod.fx_due
 
     def _ts(self, s):
         return pd.Timestamp(s, tz="UTC")
@@ -903,3 +905,17 @@ class TestPricesDue:
 
     def test_naive_timestamp_treated_as_utc(self):
         assert self.due("2026-10-01 22:30:00", now=self._ts("2026-10-02 08:00")) is False
+
+    def test_stocks_refresh_hourly_while_markets_open(self):
+        # Fri 2026-10-02 10:00 UTC
+        assert self.refresh_due("2026-10-02T08:50:00+00:00", now=self._ts("2026-10-02 10:00")) is True
+        assert self.refresh_due("2026-10-02T09:30:00+00:00", now=self._ts("2026-10-02 10:00")) is False
+
+    def test_stocks_not_refreshed_intraday_on_weekend_or_overnight(self):
+        assert self.refresh_due("2026-10-02T22:05:00+00:00", now=self._ts("2026-10-03 12:00")) is False
+        assert self.refresh_due("2026-10-02T21:00:00+00:00", now=self._ts("2026-10-02 22:30")) is True  # post-close catch-up
+        assert self.refresh_due("2026-10-05T05:00:00+00:00", now=self._ts("2026-10-05 06:00")) is False
+
+    def test_fx_only_after_close(self):
+        assert self.fx_due(now=self._ts("2026-10-02 10:00")) is False
+        assert self.fx_due(now=self._ts("2026-10-02 23:00")) is True

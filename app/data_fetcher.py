@@ -144,13 +144,39 @@ def prices_due(last_update: Optional[str], now: Optional[pd.Timestamp] = None) -
     return last_dt < cutoff
 
 
+def price_refresh_due(last_update: Optional[str], now: Optional[pd.Timestamp] = None) -> bool:
+    """Stock prices: refresh every price_refresh_minutes while markets are open
+    (Mon-Fri, 07:00 up to price_refresh_hour_utc), and always once after the
+    close (prices_due) so the final daily bar is stored.
+    """
+    if prices_due(last_update, now):
+        return True
+    now = now if now is not None else pd.Timestamp.utcnow()
+    now = now.tz_convert("UTC") if now.tzinfo is not None else now.tz_localize("UTC")
+    close_hour = int(get_config("price_refresh_hour_utc") or 22)
+    if now.weekday() >= 5 or not (7 <= now.hour < close_hour):
+        return False
+    interval = float(get_config("price_refresh_minutes") or 60)
+    last_dt = pd.to_datetime(last_update)
+    last_dt = last_dt.tz_convert("UTC") if last_dt.tzinfo is not None else last_dt.tz_localize("UTC")
+    return (now - last_dt).total_seconds() >= interval * 60 - 120  # tolerate cron jitter
+
+
+def fx_due(now: Optional[pd.Timestamp] = None) -> bool:
+    """FX rates are only needed once a day: fetch them in the post-close run."""
+    now = now if now is not None else pd.Timestamp.utcnow()
+    now = now.tz_convert("UTC") if now.tzinfo is not None else now.tz_localize("UTC")
+    return now.hour >= int(get_config("price_refresh_hour_utc") or 22)
+
+
+
 # ---------------------
 def fetch_prices_batch(
     tickers: List[str],
     throttler: Throttler,
     start_date: str = None,
     max_retries: int = 3,
-    price_update_hours: float = None  # None: once a day, see prices_due()
+    price_update_hours: float = None  # None: price_refresh_due()
 ) -> Dict[str, bool]:
     """
     Fetch daily adjusted prices for multiple tickers in a single request.
@@ -166,12 +192,12 @@ def fetch_prices_batch(
     for sym in tickers:
         security_id = db.get_security_id(sym)
         last_price = db.get_last_prices_update(security_id)
-        due = (prices_due(last_price) if price_update_hours is None
+        due = (price_refresh_due(last_price) if price_update_hours is None
                else should_update(last_price, price_update_hours))
         if due:
             tickers_to_fetch.append(sym)
         else:
-            logging.info("Skipping %s, prices already fetched for today's cycle.", sym)
+            logging.info("Skipping %s, prices are fresh enough.", sym)
             results[sym] = True  # already up-to-date
 
     if not tickers_to_fetch:
@@ -417,8 +443,15 @@ def run_fetch(tickers: List[str], batch_size: int = 20, force: bool = False):
     # -----------------------------
     # Fetch missing FX conversion rates
     # -----------------------------
-    logging.info("🔄 Checking for missing FX rates...")
-    fx_success = fetch_missing_fx_rates(throttler=throttler)
+    needs_fx = force or fx_due() or any(
+        db.get_latest_fx_date(c) is None
+        for c in db.get_all_security_currencies() if c and c != "EUR")
+    if not needs_fx:
+        logging.info("FX rates are fetched once a day after close; skipping.")
+        fx_success = True
+    else:
+        logging.info("🔄 Checking for missing FX rates...")
+        fx_success = fetch_missing_fx_rates(throttler=throttler)
 
     if fx_success:
         logging.info("✅ FX rates updated successfully.")
