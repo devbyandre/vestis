@@ -11,6 +11,7 @@ import pandas as pd
 import middleware as mw
 from config_utils import get_config, set_config
 import telegram_client as tg
+from quiet_hours import quiet_hours_active
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
@@ -96,10 +97,11 @@ def run_immediate(cli_token=None, cli_chat=None):
     if not token or not chat:
         logging.error("Telegram token/chat not configured.")
         return
-    dnd_enabled = str(get_config("dnd") or "false").lower() in ("1", "true", "yes")
-    if dnd_enabled:
-        logging.info("DND enabled — skipping immediate alerts")
-        return
+    quiet = quiet_hours_active()
+    if quiet:
+        logging.info("Quiet hours — alerts are evaluated and held until they end")
+    else:
+        flush_held(token, chat)
     alerts_df = mw.get_alerts()
     if alerts_df.empty:
         logging.info("No active alerts")
@@ -109,7 +111,7 @@ def run_immediate(cli_token=None, cli_chat=None):
     alerts_df['symbol'] = alerts_df.get('symbol_sec', alerts_df.get('symbol_alert', '??')).fillna('??')
     alerts_df['name']   = alerts_df.get('name', pd.Series(dtype=str)).fillna('')
     now = pd.Timestamp.utcnow().replace(tzinfo=None)
-    fired_count = digest_count = 0
+    fired_count = digest_count = held_count = 0
     for symbol, group in alerts_df.groupby('symbol'):
         sec_name = group['name'].iloc[0]
         fired_lines = []
@@ -127,7 +129,7 @@ def run_immediate(cli_token=None, cli_chat=None):
                 (now - last_trigger.replace(tzinfo=None)).total_seconds() < cooldown
             # split_pending alerts are always triggered (fire until split is recorded)
             if alert_type_val == 'split_pending':
-                if on_cooldown:
+                if on_cooldown or quiet:
                     continue
                 triggered = True
             else:
@@ -151,6 +153,12 @@ def run_immediate(cli_token=None, cli_chat=None):
                 mw.save_alert_state(alert)
                 digest_count += 1
                 continue
+            if quiet:
+                # Triggered inside quiet hours: logged now, delivered by flush_held()
+                mw.log_trigger(alert_id, _log_payload(alert, "held"))
+                mw.save_alert_state(alert)
+                held_count += 1
+                continue
             description = _describe_alert(alert_type_val, alert.get('params', ''))
             line = f"  • {description}"
             if alert.get('_detail'):
@@ -172,8 +180,43 @@ def run_immediate(cli_token=None, cli_chat=None):
                 mw.log_trigger(alert_id, _log_payload(al, "immediate"))
                 mw.save_alert_state(al)
             fired_count += len(fired_lines)
-    logging.info("Immediate run complete — %d alerts sent, %d logged for digest",
-                 fired_count, digest_count)
+    logging.info("Immediate run complete — %d alerts sent, %d logged for digest, %d held",
+                 fired_count, digest_count, held_count)
+
+def flush_held(token: str, chat: str) -> int:
+    """Send one summary of the alerts held during quiet hours. Returns how many."""
+    key = "last_held_flush"
+    last = get_config(key)
+    since = pd.Timestamp(last) if last else pd.Timestamp.min
+    if since.tzinfo is not None:
+        since = since.tz_convert("UTC").tz_localize(None)
+    held = []
+    for r in mw.get_alert_history(limit=500):
+        if r.get("delivery") != "held":
+            continue
+        ts = pd.Timestamp(r["triggered_at"])
+        if ts.tzinfo is not None:
+            ts = ts.tz_convert("UTC").tz_localize(None)
+        if ts > since:
+            held.append((ts, r))
+    if not held:
+        return 0
+    held.sort(key=lambda x: x[0])
+    lines = [f"🌙 *Held during quiet hours* ({len(held)})"]
+    for ts, r in held[:25]:
+        desc = _describe_alert(r.get("alert_type", ""), r.get("params", ""))
+        line = f"  • *{_md(r.get('symbol') or '??')}* — {desc}"
+        if r.get("detail"):
+            line += f"\n      {_md(r['detail'])}"
+        lines.append(line + f"\n      _{ts.strftime('%a %H:%M')} UTC_")
+    if len(held) > 25:
+        lines.append(f"  … and {len(held) - 25} more")
+    if send_telegram(token, chat, "\n".join(lines),
+                     link=_vestis_link("🔎 Open alert history", tab="alerts", mode="history")):
+        set_config(key, pd.Timestamp.utcnow().replace(tzinfo=None).isoformat())
+        return len(held)
+    return 0
+
 
 def _log_payload(alert: dict, note: str) -> dict:
     payload = {"note": note}

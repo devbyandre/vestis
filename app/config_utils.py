@@ -43,7 +43,10 @@ DEFAULT = {
     "dcf_discount_rate": 0.10,
     "dcf_terminal_growth": 0.025,
     "dcf_conservative": True,
-    "dnd": False,
+    "dnd": False,  # quiet hours enabled: immediate alerts are held inside the window
+    "quiet_hours_start": "22:00",
+    "quiet_hours_end": "07:00",
+    "timezone": "Europe/Berlin",
 
     # --- Holdings suggestions
     "retirement_year": 2099,

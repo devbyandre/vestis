@@ -5,6 +5,12 @@ import { qk } from '../lib/queryClient'
 import toast from 'react-hot-toast'
 import { LoadingOverlay, ErrorMsg, SectionHeader, Input } from '../components/ui'
 
+function timeZones(current) {
+  let zones = []
+  try { zones = Intl.supportedValuesOf('timeZone') } catch { /* older browsers */ }
+  return [...new Set([current || 'Europe/Berlin', 'Europe/Berlin', 'UTC', ...zones])].filter(Boolean)
+}
+
 function Section({ title, children }) {
   return (
     <div className="card space-y-3">
@@ -39,7 +45,7 @@ export default function TabSettings() {
   const updateMut = useMutation({
     mutationFn: (settings) => settingsApi.update(settings),
     onSuccess: () => toast.success('Settings saved'),
-    onError: e => toast.error(e.message),
+    onError: e => toast.error(e.response?.data?.detail || e.message),
   })
   const testMut = useMutation({
     mutationFn: settingsApi.telegramTest,
@@ -78,8 +84,24 @@ export default function TabSettings() {
         <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-300">
           <input type="checkbox" checked={!!form.dnd} onChange={e => set('dnd')(e.target.checked)}
             className="rounded border-surface-3 bg-surface-2" />
-          Enable Do Not Disturb (skip immediate alerts during DND hours)
+          Quiet hours — hold alerts overnight and send one summary afterwards
         </label>
+        {form.dnd && (
+          <div className="grid grid-cols-3 gap-3">
+            <Field label="From" type="time" value={form.quiet_hours_start || '22:00'} onChange={set('quiet_hours_start')} />
+            <Field label="Until" type="time" value={form.quiet_hours_end || '07:00'} onChange={set('quiet_hours_end')} />
+            <div>
+              <label className="label">Time zone</label>
+              <select className="select" value={form.timezone || 'Europe/Berlin'} onChange={e => set('timezone')(e.target.value)}>
+                {timeZones(form.timezone).map(z => <option key={z} value={z}>{z}</option>)}
+              </select>
+            </div>
+            <p className="col-span-3 text-xs text-gray-600 -mt-1">
+              Alerts keep being checked during quiet hours; whatever fires is held and delivered in one message
+              after the window ends. Digests are not affected.
+            </p>
+          </div>
+        )}
         <div className="flex items-center gap-3">
           <button className="btn-ghost text-xs" onClick={() => testMut.mutate()} disabled={testMut.isPending}>
             {testMut.isPending ? 'Sending…' : 'Send test message'}

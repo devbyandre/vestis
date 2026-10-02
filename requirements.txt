@@ -17,3 +17,5 @@ lxml==6.1.1
 # pinned by them and pip-audit flagged an older resolved version (CVEs
 # fixed in 12.2.0+).
 pillow>=12.2.0
+# Timezone database for quiet hours (slim images may not ship /usr/share/zoneinfo)
+tzdata>=2024.1

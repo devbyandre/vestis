@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 from config_utils import get_all_config, set_config
 import telegram_client as tg
+from quiet_hours import is_valid_hhmm, is_valid_tz
 
 router = APIRouter(tags=["settings"])
 
@@ -21,6 +22,12 @@ class SettingsUpdate(BaseModel):
 
 @router.put("/settings")
 def update_settings(body: SettingsUpdate):
+    s = body.settings
+    for key in ("quiet_hours_start", "quiet_hours_end"):
+        if key in s and not is_valid_hhmm(s[key]):
+            raise HTTPException(422, f"{key} must be a time like 22:00")
+    if "timezone" in s and not is_valid_tz(s["timezone"]):
+        raise HTTPException(422, f"Unknown timezone '{s['timezone']}'")
     for key, value in body.settings.items():
         set_config(key, value)
     return {"ok": True}

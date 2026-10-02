@@ -125,7 +125,9 @@ function AlertHistory() {
                 <td className="td text-xs text-gray-300">{describeAlert(r.alert_type, r.params)}</td>
                 <td className="td text-xs text-gray-400">{r.detail || '—'}</td>
                 <td className="td text-xs text-gray-500">{r.note || '—'}</td>
-                <td className="td"><span className={`badge text-xs ${r.delivery === 'digest' ? 'bg-surface-3 text-gray-400' : 'badge-blue'}`}>{r.delivery}</span></td>
+                <td className="td"><span className={`badge text-xs ${r.delivery === 'immediate' ? 'badge-blue' : 'bg-surface-3 text-gray-400'}`}
+                  title={r.delivery === 'held' ? 'Triggered during quiet hours; delivered afterwards in one summary' : undefined}>
+                  {r.delivery === 'held' ? 'quiet hours' : r.delivery}</span></td>
               </tr>
             ))}
           </tbody>

@@ -525,3 +525,16 @@ class TestHealthAPI:
     def test_health_ok(self, api_client):
         r = api_client.get("/health")
         assert r.status_code == 200
+
+
+class TestQuietHoursSettings:
+    def test_rejects_bad_times_and_timezones(self, api_client):
+        assert api_client.put("/settings", json={"settings": {"quiet_hours_start": "25:00"}}).status_code == 422
+        assert api_client.put("/settings", json={"settings": {"timezone": "Mars/Olympus"}}).status_code == 422
+
+    def test_accepts_valid_window(self, api_client):
+        r = api_client.put("/settings", json={"settings": {
+            "dnd": True, "quiet_hours_start": "23:00", "quiet_hours_end": "06:30", "timezone": "Europe/Berlin"}})
+        assert r.status_code == 200
+        cfg = api_client.get("/settings").json()
+        assert cfg["quiet_hours_start"] == "23:00" and cfg["dnd"] is True

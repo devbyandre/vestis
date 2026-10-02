@@ -109,7 +109,8 @@ def get_alert_history(limit: int = 200, alert_id: Optional[int] = None) -> List[
         except Exception:
             payload = {}
         note = str(payload.get("note") or "")
-        r["delivery"] = "digest" if note.startswith("digest") else "immediate"
+        r["delivery"] = ("digest" if note.startswith("digest")
+                         else "held" if note == "held" else "immediate")
         r["detail"] = payload.get("detail")
         rows.append(r)
     return rows
