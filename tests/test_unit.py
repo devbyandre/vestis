@@ -862,3 +862,44 @@ class TestApplySplitsToTransactions:
         original_cost = qty * price
         adjusted_cost = row["quantity"] * row["price"]
         assert adjusted_cost == pytest.approx(original_cost)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 8. Daily price refresh schedule
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestPricesDue:
+    """Prices refresh once a day at price_refresh_hour_utc (default 22:00)."""
+
+    @pytest.fixture(autouse=True)
+    def _df(self, monkeypatch):
+        # sys.modules["data_fetcher"] is a stub here — load the real file
+        # under another name (its own imports resolve to the stubs above).
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "data_fetcher_real", os.path.join(APP_DIR, "data_fetcher.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        monkeypatch.setattr(mod, "get_config", lambda k: 22 if k == "price_refresh_hour_utc" else None)
+        self.due = mod.prices_due
+
+    def _ts(self, s):
+        return pd.Timestamp(s, tz="UTC")
+
+    def test_never_fetched(self):
+        assert self.due(None, now=self._ts("2026-10-02 10:00")) is True
+
+    def test_fetched_last_night_not_due_during_day(self):
+        assert self.due("2026-10-01T22:00:05+00:00", now=self._ts("2026-10-02 15:00")) is False
+
+    def test_due_at_refresh_time(self):
+        assert self.due("2026-10-01T22:00:05+00:00", now=self._ts("2026-10-02 22:00")) is True
+
+    def test_not_due_twice_in_same_evening(self):
+        assert self.due("2026-10-02T22:00:05+00:00", now=self._ts("2026-10-02 23:00")) is False
+
+    def test_missed_cycle_catches_up(self):
+        assert self.due("2026-09-30T22:00:05+00:00", now=self._ts("2026-10-02 09:00")) is True
+
+    def test_naive_timestamp_treated_as_utc(self):
+        assert self.due("2026-10-01 22:30:00", now=self._ts("2026-10-02 08:00")) is False

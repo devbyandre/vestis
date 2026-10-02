@@ -37,7 +37,7 @@ DEFAULT = {
     "yf_base_sleep_sec": 0.8,
     "news_max_items": 50,
     "news_min_fetch_minutes": 30,
-    "price_refresh_minutes": 25,
+    "price_refresh_hour_utc": 22,
     "dcf_projection_years": 10,
     "dcf_discount_rate": 0.10,
     "dcf_terminal_growth": 0.025,
