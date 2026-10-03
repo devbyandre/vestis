@@ -83,7 +83,9 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt -r requirements-test.txt -r api/requirements-api.txt
-      - run: PYTHONPATH=app pytest tests/test_api.py -v --tb=short
+      - run: |
+          PYTHONPATH=app pytest tests/test_api.py tests/test_alerting.py tests/test_quiet_hours.py \
+            tests/test_news.py tests/test_fast_paths.py -v --tb=short
 
   frontend-tests:
     name: Frontend Tests (Vitest)
