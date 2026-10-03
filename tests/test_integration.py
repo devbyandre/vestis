@@ -378,3 +378,39 @@ class TestAlertHoldingsInterdependency:
         alerts = mw.get_all_alerts_for_ui().set_index("id")
         assert int(alerts.loc[held_alert_id, "active"]) == 1
         assert int(alerts.loc[sold_alert_id, "active"]) == 0
+
+
+class TestDedupeAutoAlerts:
+    def _log_count(self, db_path, alert_id):
+        import sqlite3
+        with sqlite3.connect(db_path) as c:
+            return c.execute("SELECT COUNT(*) FROM alerts_log WHERE alert_id=?", (alert_id,)).fetchone()[0]
+
+    def test_keeps_newest_active_and_moves_history(self, mw, db, db_path):
+        sec = seed_security(db_path, "AAPL")
+        params = {"short": 20, "long": 50, "ma_type": "SMA", "crossover_type": "golden"}
+        old = [mw.create_alert(sec, "ma_crossover", params, automatic=True) for _ in range(3)]
+        for a in old:
+            mw.toggle_alert(a, False)
+            db.log_alert_trigger(a, {"x": 1})
+        current = mw.create_alert(sec, "ma_crossover", params, automatic=True)
+        manual = mw.create_alert(sec, "ma_crossover", params)
+        other_type = mw.create_alert(sec, "pct_change", {"pct": 5, "days": 1}, automatic=True)
+
+        assert mw.dedupe_auto_alerts() == 3
+        ids = set(mw.get_all_alerts_for_ui()["id"].astype(int))
+        assert ids == {current, manual, other_type}
+        assert self._log_count(db_path, current) == 3
+        assert mw.dedupe_auto_alerts() == 0
+
+    def test_without_active_row_keeps_newest_inactive(self, mw, db_path):
+        sec = seed_security(db_path, "TSLA")
+        a = mw.create_alert(sec, "price", {"threshold": 1}, automatic=True)
+        b = mw.create_alert(sec, "price", {"threshold": 2}, automatic=True)
+        mw.toggle_alert(a, False)
+        mw.toggle_alert(b, False)
+
+        assert mw.dedupe_auto_alerts() == 1
+        alerts = mw.get_all_alerts_for_ui()
+        assert alerts["id"].astype(int).tolist() == [b]
+        assert int(alerts.iloc[0]["active"]) == 0

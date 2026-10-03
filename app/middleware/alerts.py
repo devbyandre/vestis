@@ -84,6 +84,10 @@ def delete_alert(alert_id: int) -> None:
     db.delete_alert(alert_id)
 
 
+def dedupe_auto_alerts() -> int:
+    return db.dedupe_auto_alerts()
+
+
 def log_trigger(alert_id: int, payload: Dict) -> None:
     """Log alert trigger."""
     db.log_alert_trigger(alert_id, payload)

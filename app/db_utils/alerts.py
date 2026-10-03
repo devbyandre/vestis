@@ -81,6 +81,30 @@ def delete_alert(alert_id: int) -> None:
         conn.commit()
 
 
+def dedupe_auto_alerts() -> int:
+    """Keep one automatic alert per (security, alert_type) and delete the rest.
+
+    The keeper is the newest active row, or the newest row if none is active.
+    Trigger history of deleted rows is moved onto the keeper. Returns the number
+    of deleted alerts.
+    """
+    df = _read_sql("SELECT id, security_id, alert_type, active FROM alerts WHERE auto_managed=1")
+    if df.empty:
+        return 0
+    df["active"] = df["active"].fillna(0).astype(int)
+    df = df.sort_values(["active", "id"], ascending=False)
+    keeper = df.groupby(["security_id", "alert_type"])["id"].transform("first")
+    moves = [(int(k), int(i)) for i, k in zip(df["id"], keeper) if i != k]
+    if not moves:
+        return 0
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.executemany(_adapt_sql("UPDATE alerts_log SET alert_id=? WHERE alert_id=?"), moves)
+        cur.executemany(_adapt_sql("DELETE FROM alerts WHERE id=?"), [(i,) for _k, i in moves])
+        conn.commit()
+    return len(moves)
+
+
 def log_alert_trigger(alert_id: int, payload: dict) -> None:
     now = pd.Timestamp.utcnow().isoformat()
     with get_conn() as conn:

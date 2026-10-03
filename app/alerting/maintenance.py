@@ -127,3 +127,12 @@ def maintain_alerts():
                           cooldown_seconds=86400)
     except Exception:
         logging.exception("Error maintaining watchlist alerts")
+
+    # ensure_alert only sees active alerts, so an inactive automatic alert (stale
+    # after a sale, or switched off in the UI) gets a fresh twin; prune those.
+    try:
+        removed = mw.dedupe_auto_alerts()
+        if removed:
+            logging.info("Removed %d duplicate automatic alerts", removed)
+    except Exception:
+        logging.exception("Could not remove duplicate automatic alerts")

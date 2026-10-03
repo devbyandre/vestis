@@ -81,6 +81,7 @@ from .alerts import (
     edit_alert,
     toggle_alert,
     delete_alert,
+    dedupe_auto_alerts,
     log_trigger,
     last_trigger,
     get_alert_log_entries,
