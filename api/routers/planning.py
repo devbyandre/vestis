@@ -145,8 +145,7 @@ def get_taxonomy():
 
 @router.get("/planning/portfolio-symbols")
 def get_portfolio_symbols(portfolio_ids: Optional[str] = Query(None)):
-    ids = [int(x) for x in portfolio_ids.split(",")] if portfolio_ids else None
-    result = mw.get_portfolio_symbols(portfolio_ids=ids)
-    if isinstance(result, pd.DataFrame):
-        return _df(result)
-    return result or []
+    ids = {int(x) for x in portfolio_ids.split(",")} if portfolio_ids else None
+    portfolios = mw.list_portfolios()
+    names = [r["name"] for _, r in portfolios.iterrows() if ids is None or int(r["id"]) in ids]
+    return sorted({s for name in names for s in mw.get_portfolio_symbols(name)})

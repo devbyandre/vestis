@@ -538,3 +538,27 @@ class TestQuietHoursSettings:
         assert r.status_code == 200
         cfg = api_client.get("/settings").json()
         assert cfg["quiet_hours_start"] == "23:00" and cfg["dnd"] is True
+
+
+class TestPreviouslyCrashingEndpoints:
+    def test_crossovers_reports_a_golden_cross(self, api_client, db_path):
+        sec_id = seed_security(db_path, "AAPL")
+        seed(db_path, "INSERT INTO securities_cache (security_id, currency) VALUES (?, 'EUR')", (sec_id,))
+        closes = [100 - i for i in range(40)] + [60 + 3 * i for i in range(40)]
+        for i, c in enumerate(closes):
+            seed(db_path,
+                 "INSERT INTO prices (security_id, date, open, high, low, close, adj_close, volume) "
+                 "VALUES (?, date('now', '-' || (80 - ?) || ' days'), ?, ?, ?, ?, ?, 1000)",
+                 (sec_id, i, c, c, c, c, c))
+        r = api_client.get("/analytics/crossovers/AAPL", params={"short": 5, "long_": 20})
+        assert r.status_code == 200
+        assert "buy" in [e["type"] for e in r.json()]
+
+    def test_portfolio_symbols_lists_current_holdings(self, api_client, db_path):
+        _seed_transaction(db_path, "AAPL")
+        _seed_transaction(db_path, "TSLA")
+        _seed_transaction(db_path, "TSLA", tx_type="sell", date="2023-07-01")
+        r = api_client.get("/planning/portfolio-symbols", params={"portfolio_ids": "1"})
+        assert r.status_code == 200
+        assert r.json() == ["AAPL"]
+        assert api_client.get("/planning/portfolio-symbols").json() == ["AAPL"]

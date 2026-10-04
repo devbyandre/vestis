@@ -133,7 +133,8 @@ services:
       - coolify_net
       - default
     depends_on:
-      - db
+      db-init:
+        condition: service_completed_successfully
 
   frontend:
     build:

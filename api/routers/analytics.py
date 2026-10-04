@@ -256,10 +256,14 @@ def get_crossovers(
     if prices is None or prices.empty:
         raise HTTPException(404, f"No price data for {symbol}")
     adj = pd.to_numeric(prices["adj_close"] if "adj_close" in prices.columns else prices["close"], errors="coerce").ffill()
-    result = mw.find_crossovers(adj, short, long_)
-    if isinstance(result, pd.DataFrame):
-        return _df(result)
-    return []
+    mas = pd.concat([adj.rolling(short).mean(), adj.rolling(long_).mean()], axis=1).dropna()
+    if len(mas) < 2:
+        return []
+    buy, sell = mw.find_crossovers(mas.iloc[:, 0], mas.iloc[:, 1])
+    dates = prices["date"] if "date" in prices.columns else pd.Series(prices.index, index=prices.index)
+    events = [(i, "buy") for i in buy] + [(i, "sell") for i in sell]
+    return [{"date": str(dates.loc[mas.index[i]])[:10], "type": kind, "price": float(adj.loc[mas.index[i]])}
+            for i, kind in sorted(events)]
 
 @router.get("/analytics/local-extrema/{symbol}")
 def get_local_extrema(symbol: str, lookback_days: int = 200):
