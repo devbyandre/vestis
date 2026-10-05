@@ -4,12 +4,15 @@ news_fetcher.py — pull recent headlines for holdings and watchlist entries fro
 Yahoo Finance, score their sentiment and store them. Cron entry point; the API
 also calls refresh_news() for the manual refresh button.
 
-Yahoo's news search is US-centric: XETRA tickers and ETFs often return nothing.
-For those we retry by company name (single stocks only) and otherwise record
-"checked, nothing found" so the symbol is not hammered on every run.
+Sources: Yahoo's ticker search (US-centric), a Google News search by company
+name (covers European listings) and general market RSS feeds (see
+news_sources.py). Symbols with no coverage are recorded as "checked, nothing
+found" so they are not hammered on every run.
 """
 import argparse
+import json
 import logging
+import re
 import threading
 import time
 from typing import Callable, Dict, List, Optional, Tuple
@@ -18,6 +21,7 @@ import pandas as pd
 
 import db_utils as db
 from config_utils import get_config
+import news_sources
 from sentiment import score_headline
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -69,24 +73,77 @@ def normalize(raw: dict) -> Optional[dict]:
     }
 
 
+_google_blocked = False
+
+
+def _title_key(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", title.lower())[:80]
+
+
 def fetch_headlines(symbol: str, name: Optional[str], security_type: Optional[str]) -> Tuple[List[dict], str]:
-    """Return (normalized items, which query found them: 'ticker' | 'name' | 'none')."""
+    """Headlines from Yahoo's ticker search plus a Google News search by company name.
+
+    Returns (items, which sources found something: 'ticker', 'name', 'ticker+name' or 'none').
+    Raises only if every source failed.
+    """
+    global _google_blocked
     import yfinance as yf
 
-    def search(query: str) -> List[dict]:
-        news = yf.Search(query, max_results=1, news_count=FETCH_COUNT).news or []
-        kept = [normalize(n) for n in news if _is_relevant(n, symbol, security_type)]
-        return [k for k in kept if k]
+    found, errors, items = [], [], []
+    try:
+        news = yf.Search(symbol, max_results=1, news_count=FETCH_COUNT).news or []
+        yahoo = [k for k in (normalize(n) for n in news if _is_relevant(n, symbol, security_type)) if k]
+        if yahoo:
+            found.append("ticker")
+            items += yahoo
+    except Exception as exc:
+        errors.append(exc)
 
-    items = search(symbol)
-    if items:
-        return items, "ticker"
-    if name and (security_type or "EQUITY").upper() in ("EQUITY", "CRYPTOCURRENCY"):
-        time.sleep(float(get_config("yf_base_sleep_sec") or 0.8))
-        items = search(name)
-        if items:
-            return items, "name"
-    return [], "none"
+    company = news_sources.clean_name(name)
+    if company and not _google_blocked:
+        try:
+            google = news_sources.google_news(company, days=7, count=FETCH_COUNT)
+            if google:
+                found.append("name")
+                items += google
+        except news_sources.RateLimited as exc:
+            logging.warning("Google News is rate limiting (%s); skipping it for the rest of this run", exc)
+            _google_blocked = True
+        except Exception as exc:
+            errors.append(exc)
+
+    if not items and errors and len(errors) == (2 if company and not _google_blocked else 1):
+        raise errors[0]
+    seen, unique = set(), []
+    for it in items:
+        key = _title_key(it["title"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(it)
+    return unique, "+".join(found) or "none"
+
+
+def refresh_market_news(targets: pd.DataFrame, stamp: str) -> dict:
+    """Pull the market feeds, keep everything as market news and attach
+    headlines that name a held/watched company to that security."""
+    feeds = get_config("news_rss_feeds") or None
+    if isinstance(feeds, str):
+        try:
+            feeds = json.loads(feeds)
+        except ValueError:
+            feeds = None
+    items = news_sources.market_feeds(feeds)
+    named = [{"security_id": int(t.security_id), "symbol": t.symbol, "clean_name": news_sources.clean_name(t.name)}
+             for t in targets.itertuples()]
+    attached = 0
+    by_security: dict = {}
+    for it in items:
+        for sid in news_sources.match_targets(it["title"], named):
+            by_security.setdefault(sid, []).append(it)
+    for sid, rows in by_security.items():
+        attached += db.upsert_news(sid, rows, stamp)
+    db.upsert_market_news(items, stamp)
+    return {"market": len(items), "attached": attached}
 
 
 def _last_fetches() -> Dict[int, Tuple[pd.Timestamp, int]]:
@@ -104,7 +161,8 @@ def _due(last: Optional[Tuple[pd.Timestamp, int]], now: pd.Timestamp, min_minute
 
 
 def refresh_news(symbol: Optional[str] = None, force: bool = False,
-                 fetch: Optional[Fetch] = None, sleep: Callable[[float], None] = time.sleep) -> dict:
+                 fetch: Optional[Fetch] = None, sleep: Callable[[float], None] = time.sleep,
+                 market: Optional[Callable] = None) -> dict:
     """Fetch news for holdings + watchlist (or one `symbol`), honouring per-symbol throttling.
 
     force=True ignores the throttle (used for an explicit refresh of one symbol).
@@ -113,12 +171,14 @@ def refresh_news(symbol: Optional[str] = None, force: bool = False,
         logging.info("News refresh already running in this process — skipping")
         return {"checked": 0, "skipped": 0, "stored": 0, "errors": 0, "pruned": 0, "busy": True}
     try:
-        return _refresh(symbol, force, fetch or fetch_headlines, sleep)
+        return _refresh(symbol, force, fetch or fetch_headlines, sleep, market)
     finally:
         _run_lock.release()
 
 
-def _refresh(symbol, force, fetch, sleep) -> dict:
+def _refresh(symbol, force, fetch, sleep, market=None) -> dict:
+    global _google_blocked
+    _google_blocked = False
     now = _utcnow()
     min_minutes = float(get_config("news_min_fetch_minutes") or 30)
     pause = float(get_config("yf_base_sleep_sec") or 0.8)
@@ -154,7 +214,13 @@ def _refresh(symbol, force, fetch, sleep) -> dict:
         stats["checked"] += 1
         stats["stored"] += len(items)
 
-    stats["pruned"] = db.delete_news_older_than(_iso(now - pd.Timedelta(days=RETENTION_DAYS)))
+    if not symbol:
+        try:
+            stats.update((market or refresh_market_news)(targets, _iso(_utcnow())))
+        except Exception as exc:
+            logging.warning("Market news refresh failed: %s", exc)
+    cutoff = _iso(now - pd.Timedelta(days=RETENTION_DAYS))
+    stats["pruned"] = db.delete_news_older_than(cutoff) + db.delete_market_news_older_than(cutoff)
     logging.info("News refresh: %s", stats)
     return stats
 

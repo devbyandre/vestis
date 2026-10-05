@@ -97,3 +97,35 @@ def delete_news_older_than(before: str) -> int:
         cur = conn.cursor()
         cur.execute(sql, (before,))
         return cur.rowcount
+
+
+def upsert_market_news(items: List[dict], fetched_at: str) -> int:
+    """Store general market headlines (not tied to one security)."""
+    if not items:
+        return 0
+    sql = _adapt_sql("""
+        INSERT INTO market_news (uid, title, publisher, url, published_at, sentiment, feed, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (uid) DO UPDATE SET title = EXCLUDED.title, sentiment = EXCLUDED.sentiment
+    """)
+    rows = [(it["uid"], it["title"], it.get("publisher"), it.get("url"), it["published_at"],
+             it.get("sentiment"), it.get("feed"), fetched_at) for it in items]
+    with get_conn() as conn:
+        conn.cursor().executemany(sql, rows)
+    return len(rows)
+
+
+def get_market_news(since: str, limit: int = 500) -> pd.DataFrame:
+    return _read_sql("""
+        SELECT uid, title, publisher, url, published_at, sentiment, feed
+        FROM market_news WHERE published_at >= ?
+        ORDER BY published_at DESC LIMIT ?
+    """, (since, int(limit)))
+
+
+def delete_market_news_older_than(before: str) -> int:
+    sql = _adapt_sql("DELETE FROM market_news WHERE published_at < ?")
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(sql, (before,))
+        return cur.rowcount

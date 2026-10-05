@@ -10,7 +10,7 @@ import { timeAgo, sentimentLabel, sentimentBadgeClass, fmtSentiment } from '../l
 import { useUrlParam, setUrlParams } from '../lib/urlState'
 import { LoadingOverlay, ErrorMsg, SectionHeader, MetricCard } from '../components/ui'
 
-const SCOPES = [['all', 'All'], ['holdings', 'Holdings'], ['watchlist', 'Watchlist']]
+const SCOPES = [['all', 'All'], ['holdings', 'Holdings'], ['watchlist', 'Watchlist'], ['market', 'Market']]
 const DAYS = [1, 3, 7, 30]
 
 function Chips({ options, value, onChange }) {
@@ -132,6 +132,7 @@ export default function TabNews() {
   const summary = data?.summary ?? []
   const overall = data?.overall
   const selectSymbol = s => setSymbol(s === symbol ? '' : s)
+  const isMarket = scope === 'market'
 
   return (
     <div className="space-y-5">
@@ -179,6 +180,13 @@ export default function TabNews() {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+            {isMarket ? (
+              <div className="card lg:col-span-1 self-start text-xs text-gray-500 space-y-2">
+                <h3 className="text-sm font-semibold text-gray-200">Market news</h3>
+                <p>General market headlines from CNBC, MarketWatch, Investing.com, Nasdaq and the FT.</p>
+                <p>Headlines that name one of your companies also appear under that security.</p>
+              </div>
+            ) : (
             <div className="card lg:col-span-1 self-start">
               <h3 className="text-sm font-semibold text-gray-200 mb-2">By security</h3>
               {summary.length === 0
@@ -191,9 +199,11 @@ export default function TabNews() {
                   </div>
                 )}
               <p className="text-xs text-gray-600 mt-3">
-                Yahoo's coverage is thin for ETFs, crypto pairs and many non-US listings — those show "no coverage".
+                Sources: Yahoo Finance by ticker, Google News by company name and market news feeds.
+                ETFs rarely make headlines of their own — see Market for the wider picture.
               </p>
             </div>
+            )}
 
             <div className="lg:col-span-2 space-y-3">
               {items.length === 0 ? (

@@ -88,6 +88,25 @@ describe('TabNews', () => {
     expect(body).toEqual({ symbol: 'TSLA' })
   })
 
+  it('Market shows general headlines instead of the per-security list', async () => {
+    const seen = []
+    server.use(http.get('/api/news', ({ request }) => {
+      const scope = new URL(request.url).searchParams.get('scope')
+      seen.push(scope)
+      return HttpResponse.json(scope === 'market'
+        ? { items: [{ ...feed.items[1], uid: 'm1', title: 'Oil slips as demand cools', symbols: [] }], summary: [], overall: feed.overall }
+        : feed)
+    }))
+    const user = userEvent.setup()
+    renderWithProviders(<TabNews />)
+    await screen.findByText('By security')
+    await user.click(screen.getByRole('button', { name: 'Market' }))
+    expect(await screen.findByRole('link', { name: /Oil slips/ })).toBeInTheDocument()
+    expect(screen.getByText('Market news')).toBeInTheDocument()
+    expect(screen.queryByText('By security')).not.toBeInTheDocument()
+    expect(seen).toContain('market')
+  })
+
   it('shows an error when the feed fails', async () => {
     server.use(http.get('/api/news', () => HttpResponse.json({ detail: 'boom' }, { status: 500 })))
     renderWithProviders(<TabNews />)

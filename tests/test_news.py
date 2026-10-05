@@ -18,10 +18,20 @@ def _sell(db_path, sec, qty=5):
                   "VALUES (1, ?, '2024-02-02', 'sell', ?, 10)", (sec, qty))
 
 
-def _item(uid, title="Shares rally", hours_ago=1, sentiment=0.5):
+def _item(uid, title=None, hours_ago=1, sentiment=0.5):
+    title = title or f"Shares rally ({uid})"
     ts = pd.Timestamp.utcnow().replace(tzinfo=None) - pd.Timedelta(hours=hours_ago)
     return {"uid": uid, "title": title, "publisher": "Wire", "url": f"https://x/{uid}",
             "published_at": ts.strftime("%Y-%m-%dT%H:%M:%S"), "sentiment": sentiment}
+
+
+@pytest.fixture(autouse=True)
+def offline_sources(monkeypatch):
+    """No network in tests: external feeds return nothing unless a test says otherwise."""
+    import news_sources
+    monkeypatch.setattr(news_sources, "market_feeds", lambda feeds=None: [])
+    monkeypatch.setattr(news_sources, "google_news", lambda name, days=7, count=10: [])
+    return news_sources
 
 
 @pytest.fixture
@@ -175,6 +185,12 @@ class TestFeed:
         assert len(feed["items"]) == 2
         assert feed["overall"]["count"] == 2
 
+    def test_same_story_from_two_sources_shows_once(self, mw, db_path, universe):
+        mw.db.upsert_news(universe["held"], [_item("yahoo-1", "Held Corp beats estimates"),
+                                             _item("rss:abc", "Held Corp beats estimates!", hours_ago=2)], "t")
+        items = mw.get_news_feed()["items"]
+        assert len(items) == 1 and items[0]["uid"] == "rss:abc"   # the earliest report is kept
+
     def test_scope_symbol_and_window_filters(self, mw, db_path, universe):
         mw.db.upsert_news(universe["held"], [_item("h1"), _item("h-old", hours_ago=24 * 10)], "t")
         mw.db.upsert_news(universe["watch"], [_item("w1")], "t")
@@ -250,3 +266,57 @@ class TestApi:
         monkeypatch.setattr(news_fetcher, "fetch_headlines", boom)
         r = api_client.post("/news/refresh", json={"symbol": "HELD"})
         assert r.status_code == 200 and r.json()["errors"] == 1
+
+
+class TestSources:
+    RSS = b"""<?xml version="1.0"?><rss><channel>
+      <item><title>Allianz beats estimates - Reuters</title><link>https://example.com/a</link>
+        <guid>a</guid><pubDate>Mon, 05 Oct 2026 08:00:00 GMT</pubDate><source url="x">Reuters</source></item>
+      <item><title>Evil</title><link>javascript:alert(1)</link><guid>b</guid>
+        <pubDate>Mon, 05 Oct 2026 09:00:00 +0200</pubDate></item>
+      <item><title>No date</title><link>https://example.com/c</link><guid>c</guid></item>
+    </channel></rss>"""
+
+    def test_parse_rss_normalises_and_drops_unsafe_links(self):
+        import news_sources
+        items = news_sources.parse_rss(self.RSS, default_publisher="Feed")
+        assert [i["title"] for i in items] == ["Allianz beats estimates", "Evil"]
+        assert items[0]["publisher"] == "Reuters" and items[0]["url"] == "https://example.com/a"
+        assert items[0]["sentiment"] > 0
+        assert items[1]["url"] is None and items[1]["publisher"] == "Feed"
+        assert items[1]["published_at"] == "2026-10-05T07:00:00"     # converted to UTC
+
+    @pytest.mark.parametrize("raw,clean", [
+        ("Allianz SE", "Allianz"), ("Novo Nordisk A/S", "Novo Nordisk"), ("Henkel AG & Co. KGaA", "Henkel"),
+        ("Alibaba Group Holding Limited", "Alibaba"), ("Bitcoin EUR", "Bitcoin"), (None, None),
+    ])
+    def test_clean_name(self, raw, clean):
+        import news_sources
+        assert news_sources.clean_name(raw) == clean
+
+    def test_match_targets_by_name_and_us_ticker(self):
+        import news_sources
+        targets = [{"security_id": 1, "symbol": "ALV.DE", "clean_name": "Allianz"},
+                   {"security_id": 2, "symbol": "MSFT", "clean_name": "Microsoft"},
+                   {"security_id": 3, "symbol": "KO", "clean_name": "Coca-Cola"}]
+        assert news_sources.match_targets("Allianz shares jump", targets) == [1]
+        assert news_sources.match_targets("Why $MSFT could rally", targets) == [2]
+        assert news_sources.match_targets("Knock-on effects for KO fans", targets) == []   # 2-letter ticker ignored
+        assert news_sources.match_targets("Allianzen und Partner", targets) == []
+
+
+class TestMarketNews:
+    def test_market_headlines_are_stored_and_attached_to_named_holdings(self, nf, universe, db_path, mw,
+                                                                        monkeypatch, offline_sources):
+        seed(db_path, "INSERT INTO securities_cache (security_id, longName) VALUES (?, 'Held Corp')",
+             (universe["held"],))
+        monkeypatch.setattr(offline_sources, "market_feeds", lambda feeds=None: [
+            {**_item("rss:1", "Held Corp soars on deal"), "feed": "Wire"},
+            {**_item("rss:2", "Oil slips as demand cools"), "feed": "Wire"},
+        ])
+        stats = nf.refresh_news(fetch=lambda s, n, t: ([], "none"), sleep=lambda s: None)
+        assert stats["market"] == 2 and stats["attached"] == 1
+        feed = mw.get_news_feed(scope="market")
+        assert [i["uid"] for i in feed["items"]] == ["rss:1", "rss:2"]
+        held = mw.get_news_feed(symbol="HELD")
+        assert [i["title"] for i in held["items"]] == ["Held Corp soars on deal"]

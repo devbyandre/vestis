@@ -10,7 +10,7 @@ router = APIRouter(tags=["news"])
 
 @router.get("/news")
 def get_news(
-    scope: str = Query("all", pattern="^(all|holdings|watchlist)$"),
+    scope: str = Query("all", pattern="^(all|holdings|watchlist|market)$"),
     symbol: Optional[str] = None,
     days: int = Query(7, ge=1, le=30),
     limit: Optional[int] = Query(None, ge=1, le=500),
