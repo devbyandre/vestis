@@ -2,6 +2,7 @@ from typing import Optional
 import pandas as pd
 
 from .core import get_conn, _adapt_sql, _read_sql, _IS_POSTGRES, _ph
+from .fx import get_latest_fx_rate
 
 
 def store_security_cache(security_id: int, info: dict) -> None:
@@ -24,6 +25,17 @@ def store_security_cache(security_id: int, info: dict) -> None:
         "ebitda", "totalCash", "totalDebt", "currentRatio", "bookValue",
         "operatingCashflow", "freeCashflow", "sharesOutstanding",
     ]
+
+    info = dict(info)
+    # Yahoo reports dividendYield in percent (0.95 = 0.95%); everything here
+    # works with fractions like profitMargins. ETFs only carry 'yield' (a fraction).
+    if info.get("dividendYield") is not None:
+        try:
+            info["dividendYield"] = float(info["dividendYield"]) / 100.0
+        except (TypeError, ValueError):
+            info["dividendYield"] = None
+    elif info.get("yield") is not None:
+        info["dividendYield"] = info.get("yield")
 
     data_values = []
     for k in keys:
@@ -139,55 +151,62 @@ def store_lazy_security(security_id: int, data: dict) -> None:
         conn.commit()
 
 
-def get_security_cache(id: int) -> Optional[pd.DataFrame]:
-    df = _read_sql("""
-        SELECT s.id, s.yahoo_ticker AS symbol, sc.*
-        FROM securities s
-        LEFT JOIN securities_cache sc ON sc.security_id = s.id
-        WHERE s.id = ?
-    """, (id,))
-    if df.empty:
-        return None
+_KPI_KEYS = [
+    "security_type", "country", "exchange", "sector", "industry", "shortName", "longName",
+    "regularMarketPrice", "fiftyTwoWeekHigh", "fiftyTwoWeekLow", "volume", "averageVolume",
+    "marketCap", "beta", "trailingPE", "forwardPE", "trailingEps", "earningsTimestamp",
+    "dividendRate", "dividendYield", "enterpriseValue", "profitMargins", "operatingMargins",
+    "returnOnAssets", "returnOnEquity", "totalRevenue", "revenuePerShare", "grossProfits",
+    "ebitda", "totalCash", "totalDebt", "currentRatio", "bookValue",
+    "operatingCashflow", "freeCashflow", "sharesOutstanding",
+]
+_MONETARY = [
+    "regularMarketPrice", "fiftyTwoWeekHigh", "fiftyTwoWeekLow", "marketCap", "dividendRate",
+    "enterpriseValue", "totalRevenue", "revenuePerShare", "grossProfits", "ebitda",
+    "totalCash", "totalDebt", "bookValue", "operatingCashflow", "freeCashflow",
+]
+_CACHE_SQL = """
+    SELECT s.id, s.yahoo_ticker AS symbol, sc.*
+    FROM securities s
+    LEFT JOIN securities_cache sc ON sc.security_id = s.id
+"""
 
-    data = df.iloc[0].to_dict()
 
-    kpi_keys = [
-        "security_type", "country", "exchange", "sector", "industry", "shortName", "longName",
-        "regularMarketPrice", "fiftyTwoWeekHigh", "fiftyTwoWeekLow", "volume", "averageVolume",
-        "marketCap", "beta", "trailingPE", "forwardPE", "trailingEps", "earningsTimestamp",
-        "dividendRate", "dividendYield", "enterpriseValue", "profitMargins", "operatingMargins",
-        "returnOnAssets", "returnOnEquity", "totalRevenue", "revenuePerShare", "grossProfits",
-        "ebitda", "totalCash", "totalDebt", "currentRatio", "bookValue",
-        "operatingCashflow", "freeCashflow", "sharesOutstanding",
-    ]
+def _cache_row_in_eur(data: dict, rates: dict) -> dict:
+    """camelCase keys on both backends; monetary fields converted to EUR."""
     # `sc.*` returns Postgres' folded lowercase column names (e.g. "longname"),
-    # but SQLite preserves the declared camelCase. Normalise onto camelCase
-    # keys so callers get a consistent shape regardless of backend.
-    for k in kpi_keys:
+    # but SQLite preserves the declared camelCase.
+    for k in _KPI_KEYS:
         if k not in data and k.lower() in data:
             data[k] = data.pop(k.lower())
         else:
             data.setdefault(k, None)
-
-    currency = data.get("currency", "EUR") or "EUR"
-
-    monetary_fields = [
-        "regularMarketPrice", "fiftyTwoWeekHigh", "fiftyTwoWeekLow", "marketCap", "dividendRate",
-        "enterpriseValue", "totalRevenue", "revenuePerShare", "grossProfits", "ebitda",
-        "totalCash", "totalDebt", "bookValue", "operatingCashflow", "freeCashflow",
-    ]
-    if currency.upper() != "EUR":
-        fx_df = _read_sql("""
-            SELECT rate FROM fx_rates
-            WHERE base_currency=? AND target_currency='EUR'
-            ORDER BY date DESC LIMIT 1
-        """, (currency.upper(),))
-        fx = float(fx_df.iloc[0]["rate"]) if not fx_df.empty else 1.0
-        for field in monetary_fields:
+    currency = data.get("currency") or "EUR"
+    if currency not in rates:
+        rates[currency] = get_latest_fx_rate(currency)
+    fx = rates[currency]
+    if fx != 1.0:
+        for field in _MONETARY:
             if data.get(field) is not None:
                 data[field] = data[field] * fx
+    return data
 
-    return pd.DataFrame([data])
+
+def get_security_cache(id: int) -> Optional[pd.DataFrame]:
+    df = _read_sql(_CACHE_SQL + " WHERE s.id = ?", (id,))
+    if df.empty:
+        return None
+    return pd.DataFrame([_cache_row_in_eur(df.iloc[0].to_dict(), {})])
+
+
+def get_security_cache_many(symbols) -> dict:
+    """{symbol: cache row (as get_security_cache, EUR)} for several symbols in one query."""
+    symbols = [str(s) for s in symbols if s]
+    if not symbols:
+        return {}
+    df = _read_sql(_CACHE_SQL + " WHERE s.yahoo_ticker IN (%s)" % ", ".join(["?"] * len(symbols)), tuple(symbols))
+    rates: dict = {}
+    return {r["symbol"]: _cache_row_in_eur(r, rates) for r in df.to_dict("records")}
 
 
 def get_last_info_update(security_id: int) -> Optional[str]:
@@ -202,3 +221,4 @@ def get_last_prices_update(security_id: int) -> Optional[str]:
         "SELECT prices_updated_at FROM prices WHERE security_id=? LIMIT 1", (security_id,)
     )
     return str(df.iloc[0]["prices_updated_at"]) if not df.empty else None
+

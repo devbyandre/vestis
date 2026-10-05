@@ -31,6 +31,7 @@ DEFAULT = {
     "telegram_chat_id": "",
     "vestis_url": "",
     "tax_rate": 0.25,
+    "tax_allowance": 1000,
     "valuation_cache_hours": 24,
     "kpi_cache_hours": 24,
     "yf_max_req_per_min": 45,

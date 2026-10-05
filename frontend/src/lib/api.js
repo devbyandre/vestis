@@ -48,6 +48,8 @@ export const holdingsApi = {
     get('/holdings/risk-timeseries', { portfolio_ids: portfolio_ids?.join(',') }),
   metrics: (portfolio_ids) =>
     get('/holdings/metrics', { portfolio_ids: portfolio_ids?.join(',') }),
+  performance: (portfolio_ids) =>
+    get('/holdings/performance', { portfolio_ids: portfolio_ids?.join(',') }),
 }
 
 // ── Transactions ──────────────────────────────────────────────────────────────
@@ -116,6 +118,8 @@ export const planningApi = {
     get('/planning/allocation-over-time', { portfolio_ids: portfolio_ids?.join(','), group_by }),
   allocationOverTimeAll: (portfolio_ids) =>
     get('/planning/allocation-over-time-all', { portfolio_ids: portfolio_ids?.join(',') }),
+  riskBreakdown: (portfolio_ids, current_only, types) =>
+    get('/planning/risk-breakdown', { portfolio_ids: portfolio_ids?.join(','), current_only, types: types?.length ? types.join(',') : undefined }),
   riskOverTime: (portfolio_ids, aggregate = true) =>
     get('/planning/risk-over-time', { portfolio_ids: portfolio_ids?.join(','), aggregate }),
 }

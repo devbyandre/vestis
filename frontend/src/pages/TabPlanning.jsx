@@ -1,5 +1,5 @@
 import { useState, useMemo, lazy, Suspense } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { planningApi, portfolioApi, settingsApi } from '../lib/api'
 import { qk } from '../lib/queryClient'
@@ -31,7 +31,7 @@ const ASSET_TYPES = ['Equity', 'ETF', 'Bond', 'Crypto', 'Cash', 'Commodity']
 // the Actual-vs-Target asset chart compares "EQUITY" against "Equity" and
 // never matches anything, so every "Actual" bar renders as zero.
 const ASSET_TYPE_ALIASES = {
-  EQUITY: 'Equity', ETF: 'ETF', MUTUALFUND: 'Bonds', BOND: 'Bonds',
+  EQUITY: 'Equity', ETF: 'ETF', MUTUALFUND: 'Bond', BOND: 'Bond',
   CRYPTOCURRENCY: 'Crypto', CURRENCY: 'Cash',
 }
 function remapAssetTypeKeys(obj) {
@@ -40,6 +40,16 @@ function remapAssetTypeKeys(obj) {
     const key = ASSET_TYPE_ALIASES[k.toUpperCase()] || k
     out[key] = (out[key] || 0) + v
   })
+  return out
+}
+
+// Asset targets are fractions keyed by ASSET_TYPES. Older configs used
+// "Bonds" and some were saved as whole percents; normalise both.
+function assetFractions(raw) {
+  const out = {}
+  Object.entries(raw || {}).forEach(([k, v]) => { out[k === 'Bonds' ? 'Bond' : k] = Number(v) || 0 })
+  const total = Object.values(out).reduce((s, v) => s + v, 0)
+  if (total > 1.5) Object.keys(out).forEach(k => { out[k] = out[k] / 100 })
   return out
 }
 
@@ -70,28 +80,6 @@ function computeGlidepath(dates, preRisk, postRisk, retirementYear) {
   })
 }
 
-// Groups detailed risk rows (date, weighted_risk, [categoryKey]) into a
-// dates/series shape (fraction of total per date) — mirrors how
-// /planning/allocation-over-time shapes its response, but computed
-// client-side since risk-over-time?aggregate=false returns raw rows.
-function groupRiskByCategory(rows, categoryKey) {
-  const byDateCat = {}
-  rows.forEach(r => {
-    const d = r.date
-    const cat = r[categoryKey] || 'Unknown'
-    byDateCat[d] = byDateCat[d] || {}
-    byDateCat[d][cat] = (byDateCat[d][cat] || 0) + (r.weighted_risk || 0)
-  })
-  const dates = Object.keys(byDateCat).sort()
-  const cats = [...new Set(rows.map(r => r[categoryKey] || 'Unknown'))].sort()
-  const series = {}
-  cats.forEach(c => { series[c] = dates.map(d => {
-    const total = Object.values(byDateCat[d]).reduce((s, v) => s + v, 0) || 1
-    return (byDateCat[d][c] || 0) / total
-  }) })
-  return { dates, series }
-}
-
 function latestSnapshot(series, dates) {
   if (!dates?.length) return {}
   const out = {}
@@ -113,8 +101,8 @@ function TargetSettings({ settings, kpis, onSave, saving }) {
   const securityCfg = safeJson(settings?.target_security_allocation, {})
 
   const [retirementYear, setRetirementYear] = useState(settings?.retirement_year || 2047)
-  const [pre, setPre] = useState(assetRaw.pre_retirement || assetRaw.current || {})
-  const [post, setPost] = useState(assetRaw.post_retirement || assetRaw.retirement || {})
+  const [pre, setPre] = useState(() => assetFractions(assetRaw.pre_retirement || assetRaw.current))
+  const [post, setPost] = useState(() => assetFractions(assetRaw.post_retirement || assetRaw.retirement))
   const [preRisk, setPreRisk] = useState(riskCfg.pre_retirement_risk ?? 0.4)
   const [postRisk, setPostRisk] = useState(riskCfg.post_retirement_risk ?? 0.2)
   const [marketVol, setMarketVol] = useState(riskCfg.market_volatility ?? 0.15)
@@ -162,10 +150,11 @@ function TargetSettings({ settings, kpis, onSave, saving }) {
   const setIndustryW = (sec, ind, v) => setIndustryWeights(w => ({ ...w, [sec]: { ...(w[sec] || {}), [ind]: parseFloat(v) || 0 } }))
   const setSecurityW = (sym, v) => setSecurityWeights(w => ({ ...w, [sym]: parseFloat(v) || 0 }))
 
-  const preSum = Object.values(pre).reduce((s, v) => s + (Number(v) || 0), 0)
-  const postSum = Object.values(post).reduce((s, v) => s + (Number(v) || 0), 0)
+  const preSum = Object.values(pre).reduce((s, v) => s + (Number(v) || 0), 0) * 100
+  const postSum = Object.values(post).reduce((s, v) => s + (Number(v) || 0), 0) * 100
+  // Inputs are in percent; targets are stored as fractions.
   const setAsset = (which, asset) => (val) => {
-    const num = parseFloat(val) || 0
+    const num = (parseFloat(val) || 0) / 100
     if (which === 'pre') setPre(p => ({ ...p, [asset]: num }))
     else setPost(p => ({ ...p, [asset]: num }))
   }
@@ -219,7 +208,7 @@ function TargetSettings({ settings, kpis, onSave, saving }) {
           {ASSET_TYPES.map(a => (
             <div key={a} className="flex items-center gap-2 mb-1">
               <span className="text-xs text-gray-400 w-24">{a}</span>
-              <input type="number" className="input py-1 text-xs" value={pre[a] ?? 0}
+              <input type="number" className="input py-1 text-xs" value={Math.round((pre[a] ?? 0) * 1000) / 10}
                 onChange={e => setAsset('pre', a)(e.target.value)} min="0" max="100" step="1" />
             </div>
           ))}
@@ -231,7 +220,7 @@ function TargetSettings({ settings, kpis, onSave, saving }) {
           {ASSET_TYPES.map(a => (
             <div key={a} className="flex items-center gap-2 mb-1">
               <span className="text-xs text-gray-400 w-24">{a}</span>
-              <input type="number" className="input py-1 text-xs" value={post[a] ?? 0}
+              <input type="number" className="input py-1 text-xs" value={Math.round((post[a] ?? 0) * 1000) / 10}
                 onChange={e => setAsset('post', a)(e.target.value)} min="0" max="100" step="1" />
             </div>
           ))}
@@ -245,7 +234,7 @@ function TargetSettings({ settings, kpis, onSave, saving }) {
 
       <div className="card">
         <p className="text-xs font-semibold text-gray-300 mb-1">Sector / Industry / Security Targets</p>
-        <p className="text-xs text-gray-600 mb-3">Click a sector to set its target weight; industries and securities within it become editable once it has weight &gt; 0.</p>
+        <p className="text-xs text-gray-600 mb-3">Click a sector to set its target weight; industries and securities within it become editable once it has weight &gt; 0. Sector weights are shares of your individual stocks (ETFs have no sector) and industry weights are shares within their sector, as fractions (0.25 = 25%). Security weights are shares of the whole portfolio.</p>
         <div className="flex flex-wrap gap-1.5 mb-3">
           {allSectors.map(sec => (
             <button key={sec} className={`badge text-xs cursor-pointer ${expandedSectors.includes(sec) ? 'badge-blue' : 'bg-surface-3 text-gray-500'}`}
@@ -323,8 +312,19 @@ function areaChart(title, dates, series, colors = AREA_COLORS, height = 260) {
   )
 }
 
-function actualVsTargetBar(title, actual, targets, height = 260) {
-  const labels = [...new Set([...Object.keys(actual), ...targets.flatMap(t => Object.keys(t.data))])].sort()
+// rebalancing.industry_weights is keyed "Sector → Industry".
+function industryShares(weights) {
+  const out = {}
+  Object.entries(weights || {}).forEach(([k, v]) => { const ind = k.split(' → ').pop(); out[ind] = (out[ind] || 0) + v })
+  return out
+}
+
+function actualVsTargetBar(title, actual, targets, height = 260, maxBars = null) {
+  let labels = [...new Set([...Object.keys(actual), ...targets.flatMap(t => Object.keys(t.data))])].sort()
+  if (maxBars) {
+    const size = l => Math.max(actual[l] || 0, ...targets.map(t => t.data[l] || 0))
+    labels = labels.filter(l => size(l) >= 0.005).sort((a, b) => size(b) - size(a)).slice(0, maxBars)
+  }
   return (
     <div className="card">
       <p className="text-xs text-gray-500 mb-2">{title}</p>
@@ -356,7 +356,7 @@ function categoryBarWithTarget(title, values, targetPct, height = 240) {
         }}
         config={plotlyConfig} style={{ width: '100%' }} useResizeHandler
       />
-      <p className="text-xs text-gray-600 mt-1">Dashed line = pre-retirement target risk.</p>
+      <p className="text-xs text-gray-600 mt-1">Annualised volatility, value-weighted within each category. Dashed line = pre-retirement target risk.</p>
     </div>
   )
 }
@@ -377,11 +377,17 @@ export default function TabPlanning() {
   const assetTargets = safeJson(settings?.asset_allocation_targets, {})
   const sectorTargets = safeJson(settings?.target_sector_allocation, {})
   const industryTargetsNested = safeJson(settings?.target_industry_allocation, {})
+  // Sector targets are shares of the individual stocks; industry targets are
+  // shares within their sector — expressed here as shares of stocks too.
+  const sectorTargetsNorm = useMemo(() => normalize(sectorTargets), [sectorTargets])
   const industryTargetsFlat = useMemo(() => {
     const out = {}
-    Object.values(industryTargetsNested).forEach(inds => Object.entries(inds || {}).forEach(([ind, w]) => { out[ind] = (out[ind] || 0) + w }))
+    Object.entries(industryTargetsNested).forEach(([sector, inds]) => {
+      const within = normalize(inds || {})
+      Object.entries(within).forEach(([ind, w]) => { out[ind] = (out[ind] || 0) + w * (sectorTargetsNorm[sector] || 0) })
+    })
     return out
-  }, [industryTargetsNested])
+  }, [industryTargetsNested, sectorTargetsNorm])
 
   const { data: kpisRaw = [], isLoading, error } = useQuery({ queryKey: qk.kpis(ids), queryFn: () => planningApi.kpis(ids) })
   const { data: rebalancing } = useQuery({ queryKey: qk.rebalancing(ids, retirementYear), queryFn: () => planningApi.rebalancing(ids, retirementYear) })
@@ -394,7 +400,6 @@ export default function TabPlanning() {
   const industryTime = allocAll?.industry
   const symbolTime = allocAll?.symbol
   const { data: riskTime = [], isLoading: riskLoading } = useQuery({ queryKey: qk.riskOverTime(ids, true), queryFn: () => planningApi.riskOverTime(ids, true) })
-  const { data: riskDetailedRaw = [], isLoading: riskDetailLoading } = useQuery({ queryKey: qk.riskOverTime(ids, false), queryFn: () => planningApi.riskOverTime(ids, false) })
 
   const saveMut = useMutation({
     mutationFn: (vals) => settingsApi.update(vals),
@@ -418,13 +423,6 @@ export default function TabPlanning() {
   // charts (already grouped across all-time holdings server-side) aren't
   // re-filterable this way without a further backend change, so they show
   // full history regardless of these two filters.
-  const riskDetailed = useMemo(() => {
-    let rows = riskDetailedRaw
-    if (showCurrentOnly) rows = rows.filter(r => currentSymbols.has(r.symbol))
-    if (typeFilter.length) rows = rows.filter(r => typeFilter.includes(r.security_type))
-    return rows
-  }, [riskDetailedRaw, showCurrentOnly, typeFilter, currentSymbols])
-
   const typeAlloc = useMemo(() => {
     const m = {}
     kpis.forEach(r => { const k = r.security_type || 'Other'; m[k] = (m[k] || 0) + (r.market_value || 0) })
@@ -448,29 +446,30 @@ export default function TabPlanning() {
     return { dates: symbolTime.dates, series }
   }, [symbolTime, showCurrentOnly, currentSymbols])
 
-  const riskByType = useMemo(() => groupRiskByCategory(riskDetailed, 'security_type'), [riskDetailed])
-  const riskBySector = useMemo(() => groupRiskByCategory(riskDetailed, 'sector'), [riskDetailed])
-  const riskByIndustry = useMemo(() => groupRiskByCategory(riskDetailed, 'industry'), [riskDetailed])
-  const riskBySymbolAll = useMemo(() => groupRiskByCategory(riskDetailed, 'symbol'), [riskDetailed])
-  const riskTop10Symbols = useMemo(() => {
-    const latest = latestSnapshot(riskBySymbolAll.series, riskBySymbolAll.dates)
-    const top = Object.entries(latest).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k]) => k)
-    const series = {}
-    top.forEach(k => { series[k] = riskBySymbolAll.series[k] })
-    return { dates: riskBySymbolAll.dates, series }
-  }, [riskBySymbolAll])
+  // Server-side breakdown: shares of risk over time + current volatility per category.
+  const { data: riskBreak, isLoading: riskDetailLoading } = useQuery({
+    queryKey: qk.riskBreakdown(ids, showCurrentOnly, typeFilter),
+    queryFn: () => planningApi.riskBreakdown(ids, showCurrentOnly, typeFilter),
+    placeholderData: keepPreviousData,
+  })
+  const NO_SERIES = { dates: [], series: {} }
+  const riskByType = riskBreak?.share?.security_type || NO_SERIES
+  const riskBySector = riskBreak?.share?.sector || NO_SERIES
+  const riskByIndustry = riskBreak?.share?.industry || NO_SERIES
+  const riskTop10Symbols = riskBreak?.share?.symbol || NO_SERIES
+  const hasRiskBreakdown = riskByType.dates.length > 0
 
   const glidepath = useMemo(() => computeGlidepath(riskTime.map(r => r.date), preRisk, postRisk, retirementYear), [riskTime, preRisk, postRisk, retirementYear])
 
-  const latestRiskByType = useMemo(() => latestSnapshot(riskByType.series, riskByType.dates), [riskByType])
-  const latestRiskBySector = useMemo(() => latestSnapshot(riskBySector.series, riskBySector.dates), [riskBySector])
-  const latestRiskByIndustry = useMemo(() => latestSnapshot(riskByIndustry.series, riskByIndustry.dates), [riskByIndustry])
-  const latestRiskBySecurity = useMemo(() => latestSnapshot(riskBySymbolAll.series, riskBySymbolAll.dates), [riskBySymbolAll])
+  const latestRiskByType = riskBreak?.current_vol?.security_type || {}
+  const latestRiskBySector = riskBreak?.current_vol?.sector || {}
+  const latestRiskByIndustry = riskBreak?.current_vol?.industry || {}
+  const latestRiskBySecurity = riskBreak?.current_vol?.symbol || {}
 
   const deviationBySecurity = useMemo(() => {
     const out = {}
-    Object.entries(latestRiskBySecurity).forEach(([sym, frac]) => {
-      out[sym] = preRisk > 0 ? ((frac - preRisk) / preRisk) * 100 : 0
+    Object.entries(latestRiskBySecurity).forEach(([sym, vol]) => {
+      out[sym] = preRisk > 0 ? ((vol - preRisk) / preRisk) * 100 : 0
     })
     return out
   }, [latestRiskBySecurity, preRisk])
@@ -484,7 +483,7 @@ export default function TabPlanning() {
     { key: 'rsi', label: 'RSI', align: 'right', render: v => v != null ? Number(v).toFixed(1) : '—' },
     { key: 'beta', label: 'Beta', align: 'right', render: v => v != null ? Number(v).toFixed(2) : '—' },
     { key: 'trailingPE', label: 'P/E', align: 'right', render: v => v != null ? Number(v).toFixed(1) : '—' },
-    { key: 'dividendYield', label: 'Div Yld', align: 'right', render: v => v != null ? `${(Number(v) * 100).toFixed(2)}%` : '—' },
+    { key: 'dividendYield', label: 'Div Yld', align: 'right', render: v => v != null ? fmt.pct(v, 2).replace('+', '') : '—' },
   ]
   const REBAL_COLS = [
     { key: 'symbol', label: 'Security', render: (v, r) => v || r.security_label },
@@ -547,18 +546,18 @@ export default function TabPlanning() {
           </div>
 
           {allocLoading ? <ChartSkeleton /> : actualVsTargetBar('Asset Allocation: Actual vs Target', remapAssetTypeKeys(latestSnapshot(allocTime?.series, allocTime?.dates)), [
-            { name: 'Target (Pre)', data: safeJson(settings?.asset_allocation_targets, {}).pre_retirement || {} },
-            { name: 'Target (Post)', data: safeJson(settings?.asset_allocation_targets, {}).post_retirement || {} },
+            { name: 'Target (Pre)', data: assetFractions(safeJson(settings?.asset_allocation_targets, {}).pre_retirement) },
+            { name: 'Target (Post)', data: assetFractions(safeJson(settings?.asset_allocation_targets, {}).post_retirement) },
           ])}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {allocLoading ? <ChartSkeleton /> : sectorTime?.dates?.length > 0 && areaChart('Sector Distribution Over Time', sectorTime.dates, sectorTime.series)}
-            {allocLoading ? <ChartSkeleton /> : actualVsTargetBar('Sector: Actual vs Target', latestSnapshot(sectorTime?.series, sectorTime?.dates), [{ name: 'Target', data: sectorTargets }])}
+            {!rebalancing ? <ChartSkeleton /> : actualVsTargetBar('Sector: Actual vs Target (share of individual stocks)', rebalancing.sector_weights || {}, [{ name: 'Target', data: sectorTargetsNorm }])}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {allocLoading ? <ChartSkeleton /> : industryTime?.dates?.length > 0 && areaChart('Industry Distribution Over Time', industryTime.dates, industryTime.series)}
-            {allocLoading ? <ChartSkeleton /> : actualVsTargetBar('Industry: Actual vs Target', latestSnapshot(industryTime?.series, industryTime?.dates), [{ name: 'Target', data: industryTargetsFlat }])}
+            {!rebalancing ? <ChartSkeleton /> : actualVsTargetBar('Industry: Actual vs Target (share of individual stocks, top 15)', industryShares(rebalancing.industry_weights), [{ name: 'Target', data: industryTargetsFlat }], 260, 15)}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -590,13 +589,13 @@ export default function TabPlanning() {
                 ]}
                 layout={{ ...BASE, height: 260, yaxis: { ...BASE.yaxis, ticksuffix: '%' } }} config={plotlyConfig} style={{ width: '100%' }} useResizeHandler
               />
-              <p className="text-xs text-gray-600 mt-1">Target linearly declines from the pre- to post-retirement risk setting by your retirement year.</p>
+              <p className="text-xs text-gray-600 mt-1">Actual = value-weighted annualised volatility of your holdings (ignores diversification, so an upper bound). Target linearly declines from the pre- to post-retirement risk setting by your retirement year.</p>
             </div>
           )}
 
           {riskDetailLoading && <ChartSkeleton height={320} label="Loading risk breakdown…" />}
-          {riskDetailed.length > 0 && (
-            <Expander title="Risk Breakdown Over Time" defaultOpen>
+          {hasRiskBreakdown && (
+            <Expander title="Share of Portfolio Risk Over Time" defaultOpen>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {areaChart('Risk by Asset Type', riskByType.dates, riskByType.series)}
                 {areaChart('Risk by Sector', riskBySector.dates, riskBySector.series)}
@@ -606,16 +605,16 @@ export default function TabPlanning() {
             </Expander>
           )}
 
-          {riskDetailed.length > 0 && (
-            <Expander title="Risk vs Target by Category" defaultOpen>
+          {hasRiskBreakdown && (
+            <Expander title="Volatility vs Target by Category" defaultOpen>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {categoryBarWithTarget('Risk by Asset Type (current)', latestRiskByType, preRisk)}
-                {categoryBarWithTarget('Risk by Sector (current)', latestRiskBySector, preRisk)}
-                {categoryBarWithTarget('Risk by Industry (current)', latestRiskByIndustry, preRisk)}
-                {categoryBarWithTarget('Risk by Security (current)', latestRiskBySecurity, preRisk)}
+                {categoryBarWithTarget('Volatility by Asset Type (current)', latestRiskByType, preRisk)}
+                {categoryBarWithTarget('Volatility by Sector (current)', latestRiskBySector, preRisk)}
+                {categoryBarWithTarget('Volatility by Industry (current)', latestRiskByIndustry, preRisk)}
+                {categoryBarWithTarget('Volatility by Security (current)', latestRiskBySecurity, preRisk)}
               </div>
               <div className="card mt-4">
-                <p className="text-xs text-gray-500 mb-2">Risk Deviation vs Target (by Security)</p>
+                <p className="text-xs text-gray-500 mb-2">Volatility vs Target (by Security)</p>
                 <LazyPlot
                   data={[{
                     x: Object.keys(deviationBySecurity), y: Object.values(deviationBySecurity), type: 'bar',
@@ -623,7 +622,7 @@ export default function TabPlanning() {
                   }]}
                   layout={{ ...BASE, height: 260, yaxis: { ...BASE.yaxis, ticksuffix: '%' } }} config={plotlyConfig} style={{ width: '100%' }} useResizeHandler
                 />
-                <p className="text-xs text-gray-600 mt-1">% deviation of each security's risk share from the pre-retirement target. Red = contributing more risk than target, green = less.</p>
+                <p className="text-xs text-gray-600 mt-1">How much more (red) or less (green) volatile each holding is than your pre-retirement target risk, in %.</p>
               </div>
             </Expander>
           )}

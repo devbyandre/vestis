@@ -10,7 +10,7 @@ import yfinance as yf
 
 import db_utils as db
 import middleware as mw
-from config_utils import get_config
+from config_utils import get_config, set_config
 
 import sys
 import os
@@ -213,7 +213,9 @@ def fetch_prices_batch(
                 start=start_date,
                 interval="1d",
                 group_by='ticker',
-                auto_adjust=True,
+                # Raw (split-adjusted) closes, so market values match what was
+                # actually traded; 'Adj Close' still carries dividend-adjusted prices.
+                auto_adjust=False,
                 threads=True
             )
             break  # success
@@ -393,13 +395,16 @@ def fetch_fundamentals_and_dividends(
 def update_symbols(symbols: List[str], throttler: Throttler, force: bool = False) -> None:
     if not symbols:
         return
+    # Prices were once stored dividend-adjusted; re-download history once so
+    # past market values use the real closes.
+    backfill = force or not get_config("prices_unadjusted")
 
     # Compute start date — normalise all to ISO string to avoid str vs Timestamp errors.
     # force=True or no history: go back to first buy date for full backfill.
     start_dates = {}
     for sym in symbols:
         latest_df = db.get_price_series(sym, None, "2100-01-01")
-        if not latest_df.empty and not force:
+        if not latest_df.empty and not backfill:
             start_dates[sym] = str(latest_df["date"].max())[:10]
         else:
             sec_id = db.get_security_id(sym)
@@ -409,7 +414,8 @@ def update_symbols(symbols: List[str], throttler: Throttler, force: bool = False
 
     start_date = min([d for d in start_dates.values() if d is not None], default=None)
     logging.info("Starting batch price fetch for %d symbols from %s", len(symbols), start_date)
-    prices_result = fetch_prices_batch(symbols, throttler, start_date=start_date)
+    prices_result = fetch_prices_batch(symbols, throttler, start_date=start_date,
+                                       price_update_hours=0 if backfill else None)
 
     for sym in symbols:
         fundamentals_success = fetch_fundamentals_and_dividends(sym, throttler, force=force)
@@ -432,13 +438,18 @@ def run_fetch(tickers: List[str], batch_size: int = 20, force: bool = False):
     """
     if not tickers:
         logging.info("No tickers provided, updating all securities in DB")
-        tickers = db.get_all_symbols()
 
     throttler = Throttler()
 
+    full_run = not tickers
+    if full_run:
+        tickers = db.get_all_symbols()
     for i in range(0, len(tickers), batch_size):
         batch = [t.strip() for t in tickers[i:i + batch_size]]
         update_symbols(batch, throttler, force=force)
+    if full_run and not get_config("prices_unadjusted"):
+        set_config("prices_unadjusted", True)
+        logging.info("Price history re-downloaded with unadjusted closes")
 
     # -----------------------------
     # Fetch missing FX conversion rates

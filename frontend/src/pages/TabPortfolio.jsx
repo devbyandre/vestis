@@ -47,57 +47,39 @@ function perfGroup(rel) {
   return PERF_GROUPS.find(g => rel > g.min && rel <= g.max)?.name || null
 }
 
-function PerfCharts({ ts }) {
-  const daily = useMemo(() => {
-    if (!ts?.length) return []
-    const byDate = {}
-    ts.forEach(r => {
-      if (!byDate[r.date]) byDate[r.date] = { date: r.date, market_value: 0, cost_basis: 0 }
-      byDate[r.date].market_value += (r.market_value || 0)
-      byDate[r.date].cost_basis += (r.cost_basis || 0)
-    })
-    const rows = Object.values(byDate).sort((a, b) => a.date < b.date ? -1 : 1)
-    rows.forEach(r => {
-      r.net_value = r.market_value - r.cost_basis
-      r.rel_perf = r.cost_basis > 0 ? (r.market_value - r.cost_basis) / r.cost_basis : null
-    })
-    const firstMv = rows.find(r => r.market_value > 0)?.market_value || 1
-    rows.forEach(r => { r.indexed = r.market_value / firstMv * 100 })
-    return rows
-  }, [ts])
-
+function PerfCharts({ perf }) {
+  const daily = perf || []
   if (!daily.length) return <div className="text-gray-600 text-sm py-4">No timeseries data</div>
 
   const dates = daily.map(r => r.date)
   const mv = daily.map(r => r.market_value)
   const cb = daily.map(r => r.cost_basis)
-  const pnl = daily.map(r => r.net_value)
-  const rel = daily.map(r => r.rel_perf != null ? r.rel_perf * 100 : null)
-  const idx = daily.map(r => r.indexed)
+  const pnl = daily.map(r => r.market_value - r.cost_basis)
+  const rel = daily.map(r => r.cost_basis > 0 ? (r.market_value - r.cost_basis) / r.cost_basis * 100 : null)
+  // Time-weighted return index: buying and selling don't move it, only price changes do.
+  const twr = daily.map(r => r.twr)
+  const idx = twr.map(v => v * 100)
 
-  const yearMap = {}
-  daily.forEach(r => { const y = r.date?.slice(0, 4); if (y) yearMap[y] = r.market_value })
-  const years = Object.keys(yearMap).sort()
-  const annualReturns = years.slice(1).map((y, i) => {
-    const prev = yearMap[years[i]], curr = yearMap[y]
-    return { year: y, ret: prev > 0 ? (curr - prev) / prev * 100 : null }
+  const yearEnd = {}
+  daily.forEach(r => { yearEnd[r.date.slice(0, 4)] = r.twr })
+  const years = Object.keys(yearEnd).sort()
+  const annualReturns = years.map((y, i) => {
+    const prev = i === 0 ? daily[0].twr : yearEnd[years[i - 1]]
+    return { year: i === 0 ? `${y} (from ${daily[0].date.slice(5)})` : y, ret: prev > 0 ? (yearEnd[y] / prev - 1) * 100 : null }
   }).filter(r => r.ret != null)
 
-  const roll12 = daily.map((r, i) => {
-    const past = daily[Math.max(0, i - 252)]
-    return past?.market_value > 0 ? (r.market_value - past.market_value) / past.market_value * 100 : null
-  })
+  // Rows are calendar days, so a year back is 365 rows.
+  const roll12 = twr.map((v, i) => (i >= 365 && twr[i - 365] > 0 ? (v / twr[i - 365] - 1) * 100 : null))
 
   let peak = -Infinity
-  const dd = daily.map(r => {
-    if (r.market_value > peak) peak = r.market_value
-    return peak > 0 ? (r.market_value - peak) / peak * 100 : 0
+  const dd = twr.map(v => {
+    if (v > peak) peak = v
+    return peak > 0 ? (v / peak - 1) * 100 : 0
   })
   const window = Math.max(1, Math.floor(daily.length / 4))
-  const drawup = daily.map((r, i) => {
-    const slice = daily.slice(Math.max(0, i - window), i + 1)
-    const trough = Math.min(...slice.map(s => s.market_value))
-    return trough > 0 ? (r.market_value - trough) / trough * 100 : 0
+  const drawup = twr.map((v, i) => {
+    const trough = Math.min(...twr.slice(Math.max(0, i - window), i + 1))
+    return trough > 0 ? (v / trough - 1) * 100 : 0
   })
 
   const layout = (title, extra = {}) => ({
@@ -139,10 +121,10 @@ function PerfCharts({ ts }) {
         <div>
           <LazyPlot
             data={[{ x: dates, y: idx, name: 'Indexed', line: { color: '#14b8a6', width: 1.5 }, type: 'scatter' }]}
-            layout={layout('Indexed Portfolio Value (Base = 100)')}
+            layout={layout('Time-Weighted Return (Base = 100)')}
             config={plotlyConfig} style={{ width: '100%', height: 280 }} useResizeHandler
           />
-          <p className="text-xs text-gray-600 mt-1">Value indexed to 100 at start. Total growth regardless of invested amount.</p>
+          <p className="text-xs text-gray-600 mt-1">What 100 € invested at the start would be worth: price performance only, unaffected by buying or selling (dividends excluded).</p>
         </div>
       </div>
       {annualReturns.length > 0 && (
@@ -154,7 +136,7 @@ function PerfCharts({ ts }) {
             layout={layout('Annual Return by Year', { yaxis: { ...BASE.yaxis, ticksuffix: '%' } })}
             config={plotlyConfig} style={{ width: '100%', height: 280 }} useResizeHandler
           />
-          <p className="text-xs text-gray-600 mt-1">Year-on-year return based on market value change.</p>
+          <p className="text-xs text-gray-600 mt-1">Time-weighted return per calendar year: purchases and sales don't count as gains or losses.</p>
         </div>
       )}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -164,7 +146,7 @@ function PerfCharts({ ts }) {
             layout={layout('Rolling 12-Month Return', { yaxis: { ...BASE.yaxis, ticksuffix: '%' } })}
             config={plotlyConfig} style={{ width: '100%', height: 260 }} useResizeHandler
           />
-          <p className="text-xs text-gray-600 mt-1">Return over the trailing 12 months at each date.</p>
+          <p className="text-xs text-gray-600 mt-1">Time-weighted return over the trailing 12 months at each date.</p>
         </div>
         <div>
           <LazyPlot
@@ -175,7 +157,7 @@ function PerfCharts({ ts }) {
             layout={layout('Drawdown & Drawup', { yaxis: { ...BASE.yaxis, ticksuffix: '%' } })}
             config={plotlyConfig} style={{ width: '100%', height: 260 }} useResizeHandler
           />
-          <p className="text-xs text-gray-600 mt-1">Red = drop from peak. Green = gain from recent trough.</p>
+          <p className="text-xs text-gray-600 mt-1">On the time-weighted return. Red = drop from peak. Green = gain from recent trough.</p>
         </div>
       </div>
     </div>
@@ -314,9 +296,9 @@ export default function TabPortfolio() {
     queryKey: qk.snapshot(selectedIds),
     queryFn: () => holdingsApi.snapshot(selectedIds, false),
   })
-  const { data: ts = [], isLoading: loadingTs } = useQuery({
-    queryKey: qk.timeseries({ portfolio_ids: selectedIds }),
-    queryFn: () => holdingsApi.timeseries({ portfolio_ids: selectedIds, aggregate: true }),
+  const { data: perf = [], isLoading: loadingTs } = useQuery({
+    queryKey: qk.holdingsPerformance(selectedIds),
+    queryFn: () => holdingsApi.performance(selectedIds),
   })
   const { data: metrics } = useQuery({
     queryKey: qk.holdingsMetrics(selectedIds),
@@ -356,14 +338,14 @@ export default function TabPortfolio() {
     { key: 'market_value', label: 'Market Value', align: 'right', render: v => fmt.currency(v), exportValue: v => v },
     { key: 'sector', label: 'Sector' },
     { key: 'abs_perf', label: 'Abs P&L', align: 'right', render: v => <span className={pnlColor(v)}>{fmt.currency(v)}</span>, exportValue: v => v },
-    { key: 'rel_perf', label: 'Rel P&L', align: 'right', render: v => <PnlBadge value={v} multiplier={1} />, exportValue: v => v },
+    { key: 'rel_perf', label: 'Rel P&L', align: 'right', render: v => <PnlBadge value={v} />, exportValue: v => v },
   ]
 
   const KPI_COLS = [
     { key: 'security_label', label: 'Security' },
-    { key: 'regularMarketPrice', label: 'Price', align: 'right', render: v => v != null ? fmt.currency(v, 2) : '—' },
-    { key: 'fiftyTwoWeekLow', label: '52w Low', align: 'right', render: v => v != null ? fmt.currency(v, 2) : '—' },
-    { key: 'fiftyTwoWeekHigh', label: '52w High', align: 'right', render: v => v != null ? fmt.currency(v, 2) : '—' },
+    { key: 'regularMarketPrice', label: 'Price', align: 'right', render: v => fmt.currency(v, 2) },
+    { key: 'fiftyTwoWeekLow', label: '52w Low', align: 'right', render: v => fmt.currency(v, 2) },
+    { key: 'fiftyTwoWeekHigh', label: '52w High', align: 'right', render: v => fmt.currency(v, 2) },
     { key: 'beta', label: 'Beta', align: 'right', render: v => <span className={kpiColor.beta(v)}>{v != null ? Number(v).toFixed(2) : '—'}</span> },
     { key: 'trailingPE', label: 'P/E', align: 'right', render: v => <span className={kpiColor.pe(v)}>{v != null ? Number(v).toFixed(1) : '—'}</span> },
     { key: 'pb_ratio', label: 'P/B', align: 'right', render: v => <span className={kpiColor.pb(v)}>{v != null ? Number(v).toFixed(2) : '—'}</span> },
@@ -419,13 +401,16 @@ export default function TabPortfolio() {
         <div className="card text-center text-gray-500 py-8">No holdings match current filters.</div>
       ) : (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
             <MetricCard label="Market Value" value={fmt.currency(totals.mv)} />
-            <MetricCard label="Cost Basis" value={fmt.currency(totals.cost)} />
-            <MetricCard label="Abs. P&L" value={fmt.currency(totals.pnl)} color={pnlColor(totals.pnl)} />
-            <MetricCard label="Rel. P&L" value={fmt.pct(totals.relPnl)} color={pnlColor(totals.relPnl)} />
-            <MetricCard label="Volatility" value={metrics?.volatility != null ? fmt.pct(metrics.volatility) : 'N/A'} />
-            <MetricCard label="Sharpe" value={metrics?.sharpe != null ? metrics.sharpe.toFixed(2) : 'N/A'} />
+            <MetricCard label="Cost Basis" value={fmt.currency(totals.cost)} sub="open positions" />
+            <MetricCard label="Abs. P&L" value={fmt.currency(totals.pnl)} color={pnlColor(totals.pnl)} sub="unrealised" />
+            <MetricCard label="Rel. P&L" value={fmt.pct(totals.relPnl)} color={pnlColor(totals.relPnl)} sub="unrealised" />
+            <MetricCard label="Return p.a." value={metrics?.cagr != null ? fmt.pct(metrics.cagr) : 'N/A'} color={pnlColor(metrics?.cagr)}
+              sub={metrics?.twr != null ? `time-weighted, ${fmt.pct(metrics.twr)} total` : undefined} />
+            <MetricCard label="Volatility" value={metrics?.volatility != null ? fmt.pct(metrics.volatility).replace('+', '') : 'N/A'} sub="annualised" />
+            <MetricCard label="Sharpe" value={metrics?.sharpe != null ? metrics.sharpe.toFixed(2) : 'N/A'} sub="risk-free rate 0" />
+            <MetricCard label="Max Drawdown" value={metrics?.max_drawdown != null ? fmt.pct(metrics.max_drawdown) : 'N/A'} color="text-red-400" />
           </div>
 
           <div className="card overflow-hidden">
@@ -460,7 +445,7 @@ export default function TabPortfolio() {
           </Expander>
 
           <Expander title="Deeper Performance Analysis">
-            {loadingTs ? <LoadingOverlay /> : <PerfCharts ts={ts} />}
+            {loadingTs ? <LoadingOverlay /> : <PerfCharts perf={perf} />}
           </Expander>
         </>
       )}

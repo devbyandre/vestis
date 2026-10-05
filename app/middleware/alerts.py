@@ -370,7 +370,10 @@ def evaluate_alert(alert: dict) -> bool:
                     # Alerts from before alerts.state existed kept their side in the log
                     last_log = db.get_last_alert_log(alert.get("id"))
                     prev_side = last_log.get("side") if last_log else None
-                result = curr_side == direction and prev_side != direction
+                # Only an actual crossing counts: on the first look we just
+                # record the side, so an alert that starts out beyond its
+                # threshold doesn't fire as if it had just crossed.
+                result = prev_side is not None and curr_side == direction and prev_side != direction
                 new_state["side"] = curr_side
                 alert["_curr_side"] = curr_side
                 detail = f"price €{lp:.2f} vs threshold €{target:.2f}"

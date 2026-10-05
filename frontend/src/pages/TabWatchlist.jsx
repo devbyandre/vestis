@@ -77,9 +77,9 @@ export function TabWatchlist() {
 
   const WATCH_COLS = [
     { key: 'security_label', label: 'Security', render: (v, r) => v || r.security_name || r.name || r.symbol || r.yahoo_ticker },
-    { key: 'regularMarketPrice', label: 'Price', align: 'right', render: (v, r) => { const p = v ?? r.current_price; return p != null ? fmt.currency(p, 2) : '—' }, exportValue: (v, r) => v ?? r.current_price },
-    { key: 'fiftyTwoWeekLow', label: '52w Low', align: 'right', render: v => v != null ? fmt.currency(v, 2) : '—' },
-    { key: 'fiftyTwoWeekHigh', label: '52w High', align: 'right', render: v => v != null ? fmt.currency(v, 2) : '—' },
+    { key: 'regularMarketPrice', label: 'Price', align: 'right', render: (v, r) => fmt.currency(v ?? r.current_price, 2), exportValue: (v, r) => v ?? r.current_price },
+    { key: 'fiftyTwoWeekLow', label: '52w Low', align: 'right', render: v => fmt.currency(v, 2) },
+    { key: 'fiftyTwoWeekHigh', label: '52w High', align: 'right', render: v => fmt.currency(v, 2) },
     { key: 'beta', label: 'Beta', align: 'right', render: v => <span className={kpiColor.beta(v)}>{v != null ? Number(v).toFixed(2) : '—'}</span> },
     { key: 'trailingPE', label: 'P/E', align: 'right', render: v => <span className={kpiColor.pe(v)}>{v != null ? Number(v).toFixed(1) : '—'}</span> },
     { key: 'pb_ratio', label: 'P/B', align: 'right', render: v => <span className={kpiColor.pb(v)}>{v != null ? Number(v).toFixed(2) : '—'}</span> },

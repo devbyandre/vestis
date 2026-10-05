@@ -45,6 +45,7 @@ from .securities_cache import (
     get_security_cache,
     get_last_info_update,
     get_last_prices_update,
+    get_security_cache_many,
 )
 
 from .transactions import (
@@ -78,6 +79,7 @@ from .prices import (
 )
 
 from .dividends import (
+    get_dividends_many,
     get_dividends,
     store_dividends,
 )
@@ -119,9 +121,11 @@ from .holdings import (
     invalidate_holdings_cache,
     recompute_holdings_timeseries,
     get_security_risk_timeseries,
+    get_security_risk_timeseries_many,
     update_security_risk_timeseries,
     get_portfolio_risk_timeseries,
     get_portfolio_risk_timeseries_detailed,
+    holdings_with_risk,
 )
 
 from .fx import (
@@ -134,6 +138,9 @@ from .fx import (
 )
 
 from .news import (
+    upsert_market_news,
+    get_market_news,
+    delete_market_news_older_than,
     list_news_targets,
     upsert_news,
     record_news_fetch,

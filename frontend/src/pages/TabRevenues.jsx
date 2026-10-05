@@ -118,7 +118,8 @@ export default function TabRevenues() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <MetricCard label="Capital Gains" value={fmt.currency(summary?.total_gains || 0)} color={pnlColor(summary?.total_gains || 0)} />
         <MetricCard label="Total Dividends" value={fmt.currency(summary?.total_dividends || 0)} color="text-success" />
-        <MetricCard label={`Est. Tax (${((summary?.tax_rate || 0.26375) * 100).toFixed(2)}%)`} value={fmt.currency(summary?.estimated_tax || 0)} color="text-warning" />
+        <MetricCard label={`Est. Tax (${((summary?.tax_rate || 0.26375) * 100).toFixed(2)}%)`} value={fmt.currency(summary?.estimated_tax || 0)} color="text-warning"
+          sub={summary?.tax_allowance != null ? `per year, after ${fmt.currency(summary.tax_allowance)} allowance and loss carry-forward` : undefined} />
         <MetricCard label="Net After Tax" value={fmt.currency((summary?.total_gains || 0) + (summary?.total_dividends || 0) - (summary?.estimated_tax || 0))} />
       </div>
 

@@ -37,3 +37,19 @@ def store_dividends(security_id: int, ser: pd.Series) -> None:
     with get_conn() as conn:
         conn.cursor().executemany(sql, recs)
         conn.commit()
+
+
+def get_dividends_many(symbols) -> pd.DataFrame:
+    """Dividends of several securities in one query, with each security's currency."""
+    symbols = [str(s) for s in symbols if s]
+    if not symbols:
+        return pd.DataFrame(columns=["symbol", "date", "dividend", "currency"])
+    ph = ", ".join(["?"] * len(symbols))
+    return _read_sql(f"""
+        SELECT s.yahoo_ticker AS symbol, d.date, d.dividend, sc.currency
+        FROM dividends d
+        JOIN securities s ON d.security_id = s.id
+        LEFT JOIN securities_cache sc ON sc.security_id = s.id
+        WHERE s.yahoo_ticker IN ({ph})
+        ORDER BY d.date
+    """, tuple(symbols))

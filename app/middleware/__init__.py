@@ -95,6 +95,7 @@ from .holdings import (
     get_holdings,
     get_latest_holdings_snapshot,
     holdings_timeseries,
+    performance_series,
     recompute_all_holdings_timeseries,
     store_prices,
     fetch_portfolio_risk_timeseries,

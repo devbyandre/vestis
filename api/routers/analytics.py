@@ -1,3 +1,5 @@
+import re
+
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 import pandas as pd
@@ -8,6 +10,13 @@ import db_utils as db
 from ._helpers import _df, _safe_float
 
 router = APIRouter(tags=["analytics"])
+
+
+def _trading_days(prices: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    """Drop forward-filled weekend rows (crypto pairs such as BTC-EUR trade daily)."""
+    if "date" not in prices.columns or re.fullmatch(r"[A-Z0-9]+-(EUR|USD|USDT|GBP|CHF)", symbol.upper()):
+        return prices.reset_index(drop=True)
+    return prices[pd.to_datetime(prices["date"]).dt.dayofweek < 5].reset_index(drop=True)
 
 
 @router.get("/analytics/capital-gains")
@@ -27,6 +36,35 @@ def get_dividends(
     ids = [int(x) for x in portfolio_ids.split(",")] if portfolio_ids else None
     df = mw.calc_dividends_for_portfolio(portfolio_ids=ids, year=year)
     return _df(df)
+
+def _estimate_tax(by_year: dict, tax_rate: float, allowance: float,
+                  portfolio_ids, year) -> float:
+    """German-style estimate: per calendar year, net gains and dividends, carry
+    unused losses forward, deduct the yearly allowance, tax the rest."""
+    years = by_year
+    if year is not None:
+        # Losses carried into the selected year come from all earlier years.
+        full = {}
+        cg = mw.calc_capital_gains_fifo(portfolio_ids=portfolio_ids)
+        if cg is not None and not cg.empty:
+            for y, g in cg.groupby("year"):
+                if int(y) < int(year):
+                    full[int(y)] = {"gains": float(g["profit"].sum()), "dividends": 0.0}
+        dv = mw.calc_dividends_for_portfolio(portfolio_ids=portfolio_ids)
+        if dv is not None and not dv.empty:
+            for y, g in dv.groupby("year"):
+                if int(y) < int(year):
+                    full.setdefault(int(y), {"gains": 0.0, "dividends": 0.0})["dividends"] = float(g["total"].sum())
+        years = {**full, **by_year}
+    carry, tax = 0.0, 0.0
+    for y in sorted(years):
+        income = years[y]["gains"] + years[y]["dividends"] + carry
+        carry = min(0.0, income)
+        due = max(0.0, income - allowance) * tax_rate
+        if year is None or int(y) == int(year):
+            tax += due
+    return tax
+
 
 @router.get("/analytics/revenues-summary")
 def get_revenues_summary(portfolio_ids: Optional[str] = Query(None), year: Optional[int] = None):
@@ -52,7 +90,6 @@ def get_revenues_summary(portfolio_ids: Optional[str] = Query(None), year: Optio
 
     total_gains = float(cg["profit"].sum()) if "profit" in cg.columns else 0.0
     total_divs = float(dv["total"].sum()) if "total" in dv.columns else 0.0
-    taxable = max(0.0, total_gains) + total_divs
 
     # By year
     by_year = {}
@@ -64,6 +101,15 @@ def get_revenues_summary(portfolio_ids: Optional[str] = Query(None), year: Optio
         for y, g in dv.groupby("year"):
             by_year.setdefault(int(y), {"year": int(y), "gains": 0.0, "dividends": 0.0})
             by_year[int(y)]["dividends"] = float(g["total"].sum())
+
+    allowance = 1000.0
+    try:
+        from config_utils import get_config
+        if get_config("tax_allowance") is not None:
+            allowance = float(get_config("tax_allowance"))
+    except Exception:
+        pass
+    estimated_tax = _estimate_tax(by_year, tax_rate, allowance, ids, year)
 
     # By security
     by_sec = {}
@@ -88,8 +134,9 @@ def get_revenues_summary(portfolio_ids: Optional[str] = Query(None), year: Optio
     return {
         "total_gains": total_gains,
         "total_dividends": total_divs,
-        "estimated_tax": taxable * tax_rate,
+        "estimated_tax": estimated_tax,
         "tax_rate": tax_rate,
+        "tax_allowance": allowance,
         "by_year": sorted(by_year.values(), key=lambda x: x["year"]),
         "by_security": sorted(by_sec.values(), key=lambda x: -(x["gains"] + x["dividends"])),
         "tax_loss_candidates": sorted(tax_loss, key=lambda x: x["loss"]),
@@ -135,7 +182,9 @@ def get_indicators(
     if prices is None or prices.empty:
         raise HTTPException(404, f"No price data for {symbol}")
 
-    prices = prices.reset_index(drop=True)
+    # The history is forward-filled over weekends; indicator windows (SMA 200 =
+    # 200 trading days) and annualised metrics (sqrt(252)) assume trading days.
+    prices = _trading_days(prices, symbol)
     close = pd.to_numeric(
         prices["adj_close"] if "adj_close" in prices.columns else prices["close"],
         errors="coerce"
@@ -255,6 +304,7 @@ def get_crossovers(
     prices = db.get_price_history(symbol, lookback_days=lookback_days)
     if prices is None or prices.empty:
         raise HTTPException(404, f"No price data for {symbol}")
+    prices = _trading_days(prices, symbol)
     adj = pd.to_numeric(prices["adj_close"] if "adj_close" in prices.columns else prices["close"], errors="coerce").ffill()
     mas = pd.concat([adj.rolling(short).mean(), adj.rolling(long_).mean()], axis=1).dropna()
     if len(mas) < 2:

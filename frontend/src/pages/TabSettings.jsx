@@ -112,7 +112,8 @@ export default function TabSettings() {
 
       <Section title="Tax & Valuation">
         <div className="grid grid-cols-3 gap-3">
-          <Field label="Tax rate (fraction)" type="number" value={form.tax_rate} onChange={set('tax_rate')} hint="e.g. 0.25 = 25%" />
+          <Field label="Tax rate (fraction)" type="number" value={form.tax_rate} onChange={set('tax_rate')} hint="e.g. 0.26375 = 25% + Soli" />
+          <Field label="Yearly tax-free allowance (€)" type="number" value={form.tax_allowance} onChange={set('tax_allowance')} hint="Sparerpauschbetrag: 1000 single, 2000 joint" />
           <Field label="Valuation cache (hours)" type="number" value={form.valuation_cache_hours} onChange={set('valuation_cache_hours')} />
           <Field label="KPI cache (hours)" type="number" value={form.kpi_cache_hours} onChange={set('kpi_cache_hours')} />
         </div>

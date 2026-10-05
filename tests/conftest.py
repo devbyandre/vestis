@@ -220,6 +220,17 @@ def apply_schema(conn):
             items       INTEGER DEFAULT 0,
             query       TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS market_news (
+            uid          TEXT    PRIMARY KEY,
+            title        TEXT    NOT NULL,
+            publisher    TEXT,
+            url          TEXT,
+            published_at TEXT    NOT NULL,
+            sentiment    REAL,
+            feed         TEXT,
+            fetched_at   TEXT    NOT NULL
+        );
     """)
     conn.commit()
 

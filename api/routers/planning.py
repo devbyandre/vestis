@@ -9,6 +9,24 @@ from ._helpers import _df, _safe_float
 router = APIRouter(tags=["planning"])
 
 
+def _weekly(frame: pd.DataFrame) -> pd.DataFrame:
+    """Keep the last row of each calendar week (and so the latest day).
+
+    Daily history over many years is several thousand points per series; a
+    weekly resolution draws the same picture at a fraction of the payload.
+    """
+    idx = pd.to_datetime(frame.index)
+    return frame[pd.Series(idx.to_period("W"), index=frame.index).duplicated(keep="last") == False]  # noqa: E712
+
+
+def _series_payload(frac: pd.DataFrame) -> dict:
+    frac = _weekly(frac.sort_index()).round(5)
+    return {
+        "dates": [pd.Timestamp(d).strftime("%Y-%m-%d") for d in frac.index],
+        "series": {str(col): frac[col].tolist() for col in frac.columns},
+    }
+
+
 def _grouped_series(ts: pd.DataFrame, group_col: str) -> dict:
     # Was a per-(date, group) Python loop doing a fresh DataFrame filter on
     # every iteration — O(dates * groups) pandas operations, which dominated
@@ -17,13 +35,8 @@ def _grouped_series(ts: pd.DataFrame, group_col: str) -> dict:
     # in one vectorized pass.
     pivot = ts.pivot_table(index="date", columns=group_col, values="market_value",
                             aggfunc="sum", fill_value=0.0)
-    pivot = pivot.sort_index()
     totals = pivot.sum(axis=1).replace(0, 1.0)
-    frac = pivot.div(totals, axis=0)
-    return {
-        "dates": frac.index.tolist(),
-        "series": {col: frac[col].tolist() for col in frac.columns},
-    }
+    return _series_payload(pivot.div(totals, axis=0))
 
 
 def _prep_allocation_ts(portfolio_ids: Optional[str]):
@@ -84,6 +97,53 @@ def get_allocation_over_time_all(portfolio_ids: Optional[str] = Query(None)):
     }
 
 
+@router.get("/planning/risk-breakdown")
+def get_risk_breakdown(
+    portfolio_ids: Optional[str] = Query(None),
+    current_only: bool = False,
+    types: Optional[str] = Query(None),
+):
+    """Risk by asset type / sector / industry / security.
+
+    share: each category's share of the portfolio's value-weighted volatility
+    over time (weekly; securities: top 10 by current contribution).
+    current_vol: each category's current value-weighted annualised volatility.
+    """
+    import db_utils as db
+    ids = [int(x) for x in portfolio_ids.split(",")] if portfolio_ids else None
+    groups = ("security_type", "sector", "industry", "symbol")
+    empty = {"share": {g: {"dates": [], "series": {}} for g in groups}, "current_vol": {g: {} for g in groups}}
+    hold = db.get_holdings_timeseries(portfolio_ids=ids)
+    if hold is None or hold.empty:
+        return empty
+    if current_only:
+        held = set(mw.get_latest_holdings_snapshot(portfolio_ids=ids, aggregate=True).get("symbol", []))
+        hold = hold[hold["symbol"].isin(held)]
+    if types:
+        hold = hold[hold["security_type"].isin(types.split(","))]
+    if hold.empty:
+        return empty
+    df = db.holdings_with_risk(hold)
+    if df.empty:
+        return empty
+    for col in ("security_type", "sector", "industry", "symbol"):
+        df[col] = df[col].fillna("Unknown")
+    latest = df[df["date"] == df["date"].max()]
+    out = {"share": {}, "current_vol": {}}
+    for g in groups:
+        pivot = df.pivot_table(index="date", columns=g, values="weighted_risk", aggfunc="sum", fill_value=0.0)
+        if g == "symbol":
+            top = latest.groupby("symbol")["weighted_risk"].sum().nlargest(10).index
+            pivot = pivot[[c for c in pivot.columns if c in top]]
+        totals = df.groupby("date")["weighted_risk"].sum().reindex(pivot.index).replace(0, 1.0)
+        out["share"][g] = _series_payload(pivot.div(totals, axis=0))
+        cur = latest.groupby(g).apply(
+            lambda x: float((x["risk_score"] * x["market_value"]).sum() / x["market_value"].sum())
+            if x["market_value"].sum() > 0 else None, include_groups=False)
+        out["current_vol"][g] = {str(k): round(v, 5) for k, v in cur.items() if v is not None}
+    return out
+
+
 @router.get("/planning/risk-over-time")
 def get_risk_over_time(portfolio_ids: Optional[str] = Query(None), aggregate: bool = True):
     """Portfolio risk over time. aggregate=True (default): date+weighted_risk
@@ -95,6 +155,9 @@ def get_risk_over_time(portfolio_ids: Optional[str] = Query(None), aggregate: bo
     if df is None or df.empty:
         return []
     df = df.copy()
+    if aggregate:
+        df = _weekly(df.set_index(pd.to_datetime(df["date"]))[["weighted_risk"]].sort_index()).round(5)
+        return [{"date": d.strftime("%Y-%m-%d"), "weighted_risk": v} for d, v in df["weighted_risk"].items()]
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
     if not aggregate:
@@ -113,7 +176,8 @@ def get_kpis(portfolio_ids: Optional[str] = Query(None)):
     snap = mw.get_latest_holdings_snapshot(portfolio_ids=ids, aggregate=False)
     rows = _df(snap)
     # Enrich each holding with cached fundamentals (beta, P/E, dividend yield, RSI, etc.)
-    cache = {}
+    import db_utils as db
+    cache = db.get_security_cache_many({r.get("symbol") for r in rows})
     enrich_fields = ["regularMarketPrice", "bookValue", "beta", "trailingPE", "forwardPE", "trailingEps",
                      "dividendRate", "dividendYield", "marketCap", "rsi",
                      "fiftyTwoWeekHigh", "fiftyTwoWeekLow", "profitMargins"]
@@ -121,12 +185,7 @@ def get_kpis(portfolio_ids: Optional[str] = Query(None)):
         sym = r.get("symbol")
         if not sym:
             continue
-        if sym not in cache:
-            try:
-                cache[sym] = mw.get_security_basic(sym) or {}
-            except Exception:
-                cache[sym] = {}
-        basic = cache[sym]
+        basic = cache.get(sym, {})
         for f in enrich_fields:
             if f not in r or r.get(f) is None:
                 r[f] = _safe_float(basic.get(f)) if isinstance(basic.get(f), (int, float)) else basic.get(f)

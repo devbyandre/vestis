@@ -1,6 +1,7 @@
 from typing import Dict
 import pandas as pd
 
+from .fx import get_latest_fx_rate
 from .core import get_conn, _read_sql
 from .securities import get_security_id
 from .transactions import delete_security_if_no_transactions
@@ -43,16 +44,8 @@ def get_watchlist() -> pd.DataFrame:
     """)
 
     currencies = df["currency"].dropna().unique() if "currency" in df.columns else []
-    fx_map: Dict[str, float] = {}
-    for cur in currencies:
-        if cur.upper() == "EUR":
-            fx_map[cur] = 1.0
-        else:
-            r = _read_sql(
-                "SELECT rate FROM fx_rates WHERE base_currency=? AND target_currency='EUR' ORDER BY date DESC LIMIT 1",
-                (cur.upper(),),
-            )
-            fx_map[cur] = float(r.iloc[0]["rate"]) if not r.empty else 1.0
+    # get_latest_fx_rate also handles minor units (GBp = pence).
+    fx_map: Dict[str, float] = {cur: get_latest_fx_rate(cur) for cur in currencies}
 
     for field in monetary_fields:
         if field in df.columns:

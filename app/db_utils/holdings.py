@@ -127,7 +127,7 @@ def list_prices_for_security(security_id: int, start_date: str, end_date: str) -
     df = df.sort_values("date")
     all_dates = pd.date_range(start=df["date"].min(), end=df["date"].max())
     df = df.set_index("date").reindex(all_dates).ffill().reset_index().rename(columns={"index": "date"})
-    df["price"] = df["adj_close"].combine_first(df["close"])
+    df["price"] = df["close"].combine_first(df["adj_close"])
 
     fx_series = get_fx_series(currency, df["date"].min().strftime("%Y-%m-%d"),
                               df["date"].max().strftime("%Y-%m-%d"))
@@ -225,7 +225,30 @@ def _query_holdings_timeseries(
     df = df[(df["quantity"] > 0) | (df["market_value"] > 0)].reset_index(drop=True)
     for m in ["symbol","name","sector","industry","exchange","security_type"]:
         df[m] = df[m].fillna("Unknown")
+    if not latest_only and not end_date and not df.empty:
+        df = _carry_open_positions_forward(df)
     return df
+
+
+def _carry_open_positions_forward(df: pd.DataFrame) -> pd.DataFrame:
+    """Extend still-open positions whose series stops early up to the newest date.
+
+    A security's rows are only rebuilt when its prices are stored, so one with
+    a failed or skipped fetch would otherwise vanish from the latest days and
+    skew every per-date total (allocation shares, portfolio risk, totals).
+    """
+    end = df["date"].max()
+    net = _transactions.get_net_quantities()
+    last = df.sort_values("date").groupby(["portfolio_id", "security_id"]).tail(1)
+    extra = []
+    for row in last.itertuples(index=False):
+        if row.date >= end or net.get((int(row.portfolio_id), int(row.security_id)), 0.0) <= 1e-8:
+            continue
+        days = pd.date_range(row.date + pd.Timedelta(days=1), end, freq="D")
+        extra.append(pd.DataFrame([row._asdict()] * len(days)).assign(date=days))
+    if not extra:
+        return df
+    return pd.concat([df] + extra, ignore_index=True).sort_values("date").reset_index(drop=True)
 
 
 
@@ -302,6 +325,9 @@ def recompute_holdings_timeseries(portfolio_id: int, security_id: int, conn=None
                      .reset_index().rename(columns={"index": "date"}))
         df_prices["price"] = df_prices["price"].fillna(0.0)
 
+        sec = get_security_by_id(int(security_id))
+        risk_prices = get_price_series(sec["symbol"]) if sec else pd.DataFrame()
+
         lots: deque = deque()
         records = []
         tx_idx = 0
@@ -318,7 +344,7 @@ def recompute_holdings_timeseries(portfolio_id: int, security_id: int, conn=None
                 fees = float(tx.get("fees") or 0.0)
                 ttype = str(tx.get("type", "")).strip().lower()
                 if ttype == "buy":
-                    lots.append({"qty": qty, "price": tx_price, "fees": fees})
+                    lots.append({"qty": qty, "qty0": qty, "price": tx_price, "fees": fees})
                 elif ttype == "sell":
                     remaining = qty
                     while remaining > 0 and lots:
@@ -333,7 +359,8 @@ def recompute_holdings_timeseries(portfolio_id: int, security_id: int, conn=None
             qty_hold = sum(l["qty"] for l in lots)
             if qty_hold <= 0:
                 continue
-            cost_basis = sum(l["qty"] * l["price"] + l.get("fees", 0.0) for l in lots)
+            # A partly sold lot keeps only its remaining share of the purchase fee.
+            cost_basis = sum(l["qty"] * l["price"] + l["fees"] * l["qty"] / l["qty0"] for l in lots)
             records.append((cur_date.isoformat(), int(portfolio_id), int(security_id),
                             float(qty_hold), float(qty_hold * cur_price), float(cost_basis)))
 
@@ -346,7 +373,8 @@ def recompute_holdings_timeseries(portfolio_id: int, security_id: int, conn=None
         holdings_df = pd.DataFrame(
             records, columns=["date", "portfolio_id", "security_id", "quantity", "market_value", "cost_basis"]
         )
-        update_security_risk_timeseries(security_id, portfolio_id, conn=conn, holdings_df=holdings_df)
+        update_security_risk_timeseries(security_id, portfolio_id, conn=conn, holdings_df=holdings_df,
+                                        prices=risk_prices)
         if own:
             conn.commit()
     except Exception:
@@ -370,7 +398,8 @@ def get_security_risk_timeseries(security_id: int, start_date=None, end_date=Non
     return df
 
 
-def update_security_risk_timeseries(security_id: int, portfolio_ids=None, conn=None, holdings_df=None):
+def update_security_risk_timeseries(security_id: int, portfolio_ids=None, conn=None, holdings_df=None,
+                                    prices=None):
     """
     holdings_df: optional pre-computed holdings_timeseries rows (columns
     portfolio_id/security_id/date/market_value) for the caller to pass in
@@ -379,16 +408,19 @@ def update_security_risk_timeseries(security_id: int, portfolio_ids=None, conn=N
     reads via a separate pooled engine connection, which can't see rows
     inserted-but-not-committed on `conn`, so without this the holdings
     join below would silently find nothing and skip every insert.
+
+    prices: optional get_price_series() result, read by the caller before it
+    started writing on `conn` (SQLite blocks other connections' reads then).
     """
     own = conn is None
     if own:
         conn = _raw_conn()
     try:
-        sec = get_security_by_id(int(security_id))
-        if not sec:
-            return
-        symbol = sec["symbol"]
-        prices = get_price_series(symbol)
+        if prices is None:
+            sec = get_security_by_id(int(security_id))
+            if not sec:
+                return
+            prices = get_price_series(sec["symbol"])
         if prices.empty or "adj_close" not in prices:
             return
 
@@ -469,32 +501,41 @@ def get_security_risk_timeseries_many(security_ids) -> pd.DataFrame:
     return df
 
 
-def _holdings_with_risk(df_hold: pd.DataFrame) -> pd.DataFrame:
-    """Join each holdings row with the nearest risk observation of its security."""
+def holdings_with_risk(df_hold: pd.DataFrame) -> pd.DataFrame:
+    """Join each holdings row with its security's annualised volatility and weight it.
+
+    weighted_risk = volatility x the row's share of the total market value on
+    that date, so summing it per date gives the value-weighted volatility of
+    the selection (an upper bound: correlation between holdings is ignored).
+    """
     df_hold = df_hold.copy()
     df_hold["security_id"] = df_hold["security_id"].astype(int)
     df_hold["date"] = pd.to_datetime(df_hold["date"]).dt.tz_localize(None)
     df_risk = get_security_risk_timeseries_many(df_hold["security_id"].unique())
     if df_risk.empty:
         return pd.DataFrame()
+    df_risk = df_risk[["date", "security_id", "risk_score"]]
     merged = pd.merge_asof(
         df_hold.sort_values("date"), df_risk.sort_values("date"),
         on="date", by="security_id",
-        direction="nearest", tolerance=pd.Timedelta("3650D"),
+        direction="backward", tolerance=pd.Timedelta("10D"),
     )
-    return merged.dropna(subset=["weighted_risk"]).reset_index(drop=True)
+    merged = merged.dropna(subset=["risk_score"])
+    merged = merged[merged["market_value"] > 0]
+    total = merged.groupby("date")["market_value"].transform("sum")
+    merged["weighted_risk"] = merged["risk_score"] * merged["market_value"] / total
+    return merged.reset_index(drop=True)
 
 
 def get_portfolio_risk_timeseries(portfolio_ids=None) -> pd.DataFrame:
-    empty = pd.DataFrame(columns=["date", "portfolio_id", "weighted_risk"])
+    empty = pd.DataFrame(columns=["date", "weighted_risk"])
     df_hold = get_holdings_timeseries(portfolio_ids=portfolio_ids)
     if df_hold.empty:
         return empty
-    df = _holdings_with_risk(df_hold)
+    df = holdings_with_risk(df_hold)
     if df.empty:
         return empty
-    return (df.groupby(["date", "portfolio_id"])["weighted_risk"]
-              .sum().reset_index().sort_values("date"))
+    return df.groupby("date", as_index=False)["weighted_risk"].sum().sort_values("date")
 
 
 def get_portfolio_risk_timeseries_detailed(portfolio_ids=None) -> pd.DataFrame:
@@ -502,4 +543,4 @@ def get_portfolio_risk_timeseries_detailed(portfolio_ids=None) -> pd.DataFrame:
     if df_hold.empty:
         return pd.DataFrame(columns=["date","portfolio_id","security_id","symbol",
                                       "sector","industry","security_type","market_value","weighted_risk"])
-    return _holdings_with_risk(df_hold)
+    return holdings_with_risk(df_hold)

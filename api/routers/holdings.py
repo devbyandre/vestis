@@ -45,24 +45,39 @@ def get_portfolio_risk_timeseries(
     return _df(df)
 
 
+@router.get("/holdings/performance")
+def get_holdings_performance(portfolio_ids: Optional[str] = Query(None)):
+    """Daily market value, cost basis, net flow and time-weighted return index."""
+    ids = [int(x) for x in portfolio_ids.split(",")] if portfolio_ids else None
+    perf = mw.performance_series(portfolio_ids=ids)
+    if perf.empty:
+        return []
+    perf["date"] = perf["date"].dt.strftime("%Y-%m-%d")
+    return _df(perf.round({"market_value": 2, "cost_basis": 2, "flow": 2, "twr": 6}))
+
+
 @router.get("/holdings/metrics")
 def get_holdings_metrics(portfolio_ids: Optional[str] = Query(None)):
-    """Portfolio-level volatility + Sharpe from the aggregated value timeseries."""
+    """Volatility, Sharpe and max drawdown of the time-weighted return (deposits
+    and withdrawals don't count as gains or losses)."""
+    empty = {"volatility": None, "sharpe": None, "max_drawdown": None, "twr": None, "cagr": None}
     ids = [int(x) for x in portfolio_ids.split(",")] if portfolio_ids else None
-    ts = mw.holdings_timeseries(portfolio_ids=ids, aggregate=True)
-    if ts is None or ts.empty:
-        return {"volatility": None, "sharpe": None, "max_drawdown": None}
-    ts = ts.copy()
-    # Aggregate market_value by date
-    by_date = ts.groupby("date")["market_value"].sum().reset_index().sort_values("date")
-    if len(by_date) < 2:
-        return {"volatility": None, "sharpe": None, "max_drawdown": None}
-    price_df = pd.DataFrame({"close": pd.to_numeric(by_date["market_value"], errors="coerce").ffill().values})
-    try:
-        return {
-            "volatility": _safe_float(mw.volatility(price_df, "close")),
-            "sharpe": _safe_float(mw.sharpe_ratio(price_df, "close")),
-            "max_drawdown": _safe_float(mw.max_drawdown(price_df["close"])),
-        }
-    except Exception:
-        return {"volatility": None, "sharpe": None, "max_drawdown": None}
+    perf = mw.performance_series(portfolio_ids=ids)
+    if len(perf) < 3:
+        return empty
+    twr = perf.set_index("date")["twr"]
+    # Holdings are valued on calendar days; returns are measured on trading days.
+    bd = twr[twr.index.dayofweek < 5]
+    rets = bd.pct_change().dropna()
+    if rets.empty or rets.std() == 0:
+        return empty
+    years = max((twr.index[-1] - twr.index[0]).days / 365.25, 1 / 365.25)
+    total = float(twr.iloc[-1] / twr.iloc[0] - 1)
+    return {
+        "volatility": _safe_float(rets.std() * 252 ** 0.5),
+        "sharpe": _safe_float(rets.mean() * 252 / (rets.std() * 252 ** 0.5)),
+        "max_drawdown": _safe_float((twr / twr.cummax() - 1).min()),
+        "twr": _safe_float(total),
+        "cagr": _safe_float((1 + total) ** (1 / years) - 1) if total > -1 else None,
+    }
+

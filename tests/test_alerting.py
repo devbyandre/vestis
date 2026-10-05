@@ -17,6 +17,7 @@ class TestDigest:
 
         assert len(sent) == 1
         assert "Alerts since last digest" in sent[0] and "-6.0%" in sent[0]
+        assert "TSM" in sent[0] and "• *?*" not in sent[0]     # regression: security showed as "?"
         assert "last_digest_sent_daily" in cfg
 
     def test_failed_send_does_not_advance_the_digest_window(self, mw, alerting, monkeypatch):

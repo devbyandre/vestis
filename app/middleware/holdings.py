@@ -127,32 +127,8 @@ def holdings_timeseries(
     df['market_value'] = pd.to_numeric(df['market_value'], errors='coerce').fillna(0.0)
     df['cost_basis'] = pd.to_numeric(df.get('cost_basis', 0.0), errors='coerce').fillna(0.0)
 
-    # Each security's own timeseries only extends as far as its own last
-    # recompute (triggered per-security by price updates/transactions) — a
-    # security whose price hasn't been refreshed yet today simply has no
-    # row for today, while others do. Summing per date as-is would make the
-    # total look like it crashed on the most recent day(s), since only the
-    # already-refreshed securities would be counted. Forward-fill each
-    # security's series up to the global max date so a lagging security
-    # keeps contributing its last-known value instead of vanishing.
-    max_date = df['date'].max()
-    lagging = df.groupby(['portfolio_id', 'security_id'])['date'].transform('max') < max_date
-    if lagging.any():
-        filled = [g for _, g in df[~lagging].groupby(['portfolio_id', 'security_id'], sort=False)]
-        for _, g in df[lagging].groupby(['portfolio_id', 'security_id'], sort=False):
-            g = g.sort_values('date').set_index('date')
-            full_index = pd.date_range(start=g.index.min(), end=max_date, freq='D')
-            g = g.reindex(full_index).ffill()
-            g.index.name = 'date'
-            filled.append(g.reset_index())
-        df = pd.concat(filled, ignore_index=True)
-        # reindex/ffill turns portfolio_id/security_id into floats (NaN on
-        # the newly-introduced rows before ffill fills them back in) —
-        # restore int dtype since downstream code (DB lookups, groupbys)
-        # expects real ints, not numpy floats.
-        df['portfolio_id'] = df['portfolio_id'].astype(int)
-        df['security_id'] = df['security_id'].astype(int)
-
+    # Open positions are already carried forward to the newest date by
+    # db.get_holdings_timeseries; sold ones correctly stop at their sale.
     if not aggregate:
         return df
 
@@ -185,6 +161,52 @@ def recompute_all_holdings_timeseries():
         pf_id = row['portfolio_id']
         sec_id = row['security_id']
         db.recompute_holdings_timeseries(pf_id, sec_id)
+
+
+def performance_series(portfolio_ids: Optional[List[int]] = None) -> pd.DataFrame:
+    """Daily market value, cost basis, net cash flow and time-weighted return index.
+
+    Buying or selling changes the market value without being a gain or loss,
+    so returns strip out each day's net flow (EUR, fees included):
+        r_t = (MV_t - MV_{t-1} - F_t) / (MV_{t-1} + F_t)
+    twr is the cumulative product of (1 + r_t), starting at 1. Dividends are
+    not included (price return).
+    """
+    ts = db.get_holdings_timeseries(portfolio_ids=portfolio_ids)
+    if ts.empty:
+        return pd.DataFrame(columns=["date", "market_value", "cost_basis", "flow", "twr"])
+    ts["date"] = pd.to_datetime(ts["date"])
+    daily = ts.groupby("date")[["market_value", "cost_basis"]].sum().sort_index()
+    daily = daily.reindex(pd.date_range(daily.index.min(), daily.index.max(), freq="D")).ffill()
+
+    tx = db.list_transactions(portfolio_ids)
+    flow = pd.Series(0.0, index=daily.index)
+    if not tx.empty:
+        tx = tx[tx["security_id"].isin(ts["security_id"].unique())].copy()
+        tx["type"] = tx["type"].astype(str).str.lower()
+        tx = tx[tx["type"].isin(["buy", "sell"])]
+        gross = pd.to_numeric(tx["quantity"], errors="coerce").fillna(0) * pd.to_numeric(tx["price"], errors="coerce").fillna(0)
+        fees = pd.to_numeric(tx["fees"], errors="coerce").fillna(0)
+        tx["flow"] = (gross + fees).where(tx["type"] == "buy", -(gross - fees))
+        # A position is only valued from its first priced day (holidays, late
+        # price history), so a purchase's cash counts from that day too.
+        when = pd.to_datetime(tx["date"]).dt.tz_localize(None).dt.normalize()
+        first = ts.groupby(["portfolio_id", "security_id"])["date"].min()
+        starts = pd.Series([first.get((p, sid), pd.NaT) for p, sid in zip(tx["portfolio_id"], tx["security_id"])],
+                           index=tx.index)
+        is_buy = tx["type"] == "buy"
+        when = when.where(~is_buy | starts.isna() | (when >= starts), starts)
+        pos = daily.index.searchsorted(when)
+        pos = pos.clip(0, len(daily.index) - 1)
+        flow = flow.add(tx.groupby(daily.index[pos])["flow"].sum(), fill_value=0.0)
+
+    mv = daily["market_value"]
+    prev = mv.shift(1).fillna(0.0)
+    base = prev + flow
+    ret = ((mv - prev - flow) / base).where(base > 0, 0.0)
+    out = daily.assign(flow=flow, twr=(1 + ret).cumprod())
+    out.index.name = "date"
+    return out.reset_index()
 
 
 def store_prices(security_id: int, df: pd.DataFrame) -> None:

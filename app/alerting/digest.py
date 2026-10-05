@@ -138,8 +138,10 @@ def send_digest(notify: Notify, freq: str = "daily") -> None:
             parts.append("🔔 *Alerts since last digest:*")
             for r in rows:
                 try:
-                    info = mw.get_security_basic(r.get('security_id'))
-                    sym  = info.get('name') or info.get('symbol', '?')
+                    sec = mw.db.get_security_by_id(int(r.get('security_id'))) or {}
+                    basic = mw.get_security_basic(sec.get('symbol')) if sec.get('symbol') else {}
+                    name = basic.get('longName') or basic.get('shortName')
+                    sym = f"{name} ({sec['symbol']})" if name else sec.get('symbol', '?')
                 except Exception:
                     sym = '?'
                 desc = describe_alert(r.get('alert_type', ''), r.get('params', '{}'))

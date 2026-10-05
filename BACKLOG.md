@@ -14,11 +14,15 @@ history of why they were proposed.
 
 ## 1. Feature gaps (things stubbed or explicitly deferred)
 
-- **News & Sentiment follow-ups (S)** — the tab, `news_fetcher.py` and the
-  lexicon scorer in `sentiment.py` are done. Open: Yahoo has no headlines for
-  ETFs, crypto pairs and many EU listings (a second source such as RSS/Google
-  News would fix that), and the scorer reads headlines only (~70% come out
+- **News & Sentiment follow-ups (S)** — sources are Yahoo (ticker), Google
+  News (company name) and market RSS feeds. Open: ETFs rarely have news of
+  their own, and the scorer reads English headlines only (most come out
   neutral). Swapping in an ML model only needs `score_headline` replaced.
+
+- **Legacy "Price dip - potential buy" alerts (S)** — automatic alerts from an
+  old version with thresholds in the listing currency (alerts are evaluated in
+  EUR). They no longer fire spuriously, but should be switched off or deleted
+  once the user confirms.
 
 - **Recurring/scheduled investments (DCA planner) (M)** — flagged as a
   backlog feature early on ("repeating investments"). UI-wise: a form on

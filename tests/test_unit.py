@@ -438,9 +438,22 @@ class TestEvaluateAlert:
         return fired
 
     # --- price alerts (EUR, crossing) ---
+    def _cross(self, monkeypatch, alert, prices):
+        fired = []
+        for lp in prices:
+            fired.append(self._eval(monkeypatch, alert, {"last_price": lp}))
+            alert["state"] = json.dumps(alert["_state"])
+        return fired
+
     def test_price_above_triggers(self, monkeypatch):
         alert = _alert("price", {"threshold": 100.0, "mode": "absolute", "direction": "above"})
-        assert self._eval(monkeypatch, alert, {"last_price": 110.0}) is True
+        assert self._cross(monkeypatch, alert, [90.0, 110.0]) == [False, True]
+
+    def test_price_already_past_threshold_does_not_fire_on_first_look(self, monkeypatch):
+        # Regression: alerts without stored state fired immediately when the price
+        # was already beyond the threshold (no crossing happened).
+        alert = _alert("price", {"threshold": 326.75, "mode": "absolute", "direction": "below"})
+        assert self._cross(monkeypatch, alert, [33.27, 33.0]) == [False, False]
 
     def test_price_above_does_not_trigger_when_below(self, monkeypatch):
         alert = _alert("price", {"threshold": 100.0, "mode": "absolute", "direction": "above"})
@@ -448,7 +461,7 @@ class TestEvaluateAlert:
 
     def test_price_below_triggers(self, monkeypatch):
         alert = _alert("price", {"threshold": 50.0, "mode": "absolute", "direction": "below"})
-        assert self._eval(monkeypatch, alert, {"last_price": 40.0}) is True
+        assert self._cross(monkeypatch, alert, [55.0, 40.0]) == [False, True]
 
     def test_price_below_no_trigger_when_above(self, monkeypatch):
         alert = _alert("price", {"threshold": 50.0, "mode": "absolute", "direction": "below"})
@@ -459,10 +472,10 @@ class TestEvaluateAlert:
         # alert could never fire a second time.
         alert = _alert("price", {"threshold": 50.0, "mode": "absolute", "direction": "below"})
         fired = []
-        for lp in (40.0, 41.0, 60.0, 45.0):
+        for lp in (60.0, 40.0, 41.0, 60.0, 45.0):
             fired.append(self._eval(monkeypatch, alert, {"last_price": lp}))
             alert["state"] = json.dumps(alert["_state"])
-        assert fired == [True, False, False, True]
+        assert fired == [False, True, False, False, True]
 
     # --- RSI (edge-triggered with re-arm gap) ---
     def test_rsi_fires_once_then_rearms(self, monkeypatch):
@@ -643,6 +656,18 @@ class TestCalcCapitalGainsFIFO:
         # profit = 185
         assert result.iloc[0]["profit"] == pytest.approx(185.0)
 
+    def test_buy_fee_is_split_across_partial_sells(self, monkeypatch):
+        self._make_tx(monkeypatch, [
+            {"id": 1, "portfolio_id": 1, "symbol": "MSFT", "type": "buy",
+             "quantity": 10, "price": 100.0, "fees": 10.0, "date": "2023-01-01"},
+            {"id": 2, "portfolio_id": 1, "symbol": "MSFT", "type": "sell",
+             "quantity": 5, "price": 100.0, "fees": 0.0, "date": "2023-06-01"},
+            {"id": 3, "portfolio_id": 1, "symbol": "MSFT", "type": "sell",
+             "quantity": 5, "price": 100.0, "fees": 0.0, "date": "2023-07-01"},
+        ])
+        result = mw.calc_capital_gains_fifo()
+        assert result["cost_basis"].tolist() == pytest.approx([505.0, 505.0])
+
     def test_year_filter(self, monkeypatch):
         self._make_tx(monkeypatch, [
             {"id": 1, "portfolio_id": 1, "symbol": "AMZN", "type": "buy",
@@ -674,8 +699,14 @@ class TestCalcCapitalGainsFIFO:
 class TestCalcDividends:
     """Tests for calc_dividends_for_portfolio — DB calls are monkeypatched."""
 
-    def _setup(self, monkeypatch, tx_rows, div_rows_by_symbol):
+    def _setup(self, monkeypatch, tx_rows, div_rows_by_symbol, currency="EUR", rate=1.0):
         tx_df = pd.DataFrame(tx_rows)
+        monkeypatch.setattr(mw.db, "get_dividends_many", lambda syms: pd.DataFrame(
+            [{**r, "symbol": sym, "currency": currency} for sym in syms for r in div_rows_by_symbol.get(sym, [])],
+            columns=["symbol", "date", "dividend", "currency"]), raising=False)
+        monkeypatch.setattr(mw.db, "get_fx_series",
+                            lambda cur, start, end: pd.Series(rate, index=pd.date_range(start, end)),
+                            raising=False)
         monkeypatch.setattr(mw.revenues, "list_transactions", lambda pids=None: tx_df)
 
         # Patch get_dividends on the db module that middleware has already imported
@@ -697,6 +728,15 @@ class TestCalcDividends:
         result = mw.calc_dividends_for_portfolio()
         assert len(result) == 1
         assert result.iloc[0]["total"] == pytest.approx(50.0)   # 100 shares * 0.50
+
+    def test_foreign_dividend_is_converted_to_eur(self, monkeypatch):
+        self._setup(monkeypatch,
+            tx_rows=[{"id": 1, "portfolio_id": 1, "symbol": "MSFT", "type": "buy",
+                      "quantity": 10, "price": 300.0, "fees": 0.0, "date": "2023-01-01"}],
+            div_rows_by_symbol={"MSFT": [{"date": "2023-06-15", "dividend": 0.80}]},
+            currency="USD", rate=0.9)
+        result = mw.calc_dividends_for_portfolio()
+        assert result.iloc[0]["total"] == pytest.approx(10 * 0.80 * 0.9)
 
     def test_no_dividend_before_purchase(self, monkeypatch):
         self._setup(monkeypatch,
@@ -919,3 +959,56 @@ class TestPricesDue:
     def test_fx_only_after_close(self):
         assert self.fx_due(now=self._ts("2026-10-02 10:00")) is False
         assert self.fx_due(now=self._ts("2026-10-02 23:00")) is True
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Rebalancing
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestRebalancing:
+    def _run(self, monkeypatch, rows, cfg, risk=None):
+        reb = sys.modules["middleware.rebalancing"]
+        snap = pd.DataFrame(rows)
+        snap["security_id"] = range(1, len(snap) + 1)
+        monkeypatch.setattr(reb, "get_latest_holdings_snapshot", lambda **kw: snap.copy())
+        monkeypatch.setattr(reb, "get_config", lambda key: cfg.get(key))
+        monkeypatch.setattr(reb, "safe_json_load", lambda v, default=None: v if v is not None else default)
+        monkeypatch.setattr(reb, "get_watchlist", lambda: pd.DataFrame(columns=["symbol", "sector", "industry", "beta"]))
+        risk_df = pd.DataFrame(risk or [], columns=["date", "security_id", "risk_score"])
+        monkeypatch.setattr(reb.db, "get_security_risk_timeseries_many", lambda ids: risk_df, raising=False)
+        return reb.suggest_rebalancing(retirement_year=2100)
+
+    def _row(self, sym, mv, typ="EQUITY", sector="Technology", industry="Software"):
+        return {"symbol": sym, "market_value": mv, "security_type": typ, "sector": sector, "industry": industry}
+
+    def test_asset_class_shift_is_spread_and_balanced(self, monkeypatch):
+        out = self._run(monkeypatch,
+            [self._row("A", 300), self._row("B", 200), self._row("ETF1", 500, "ETF", "Unknown", "Unknown")],
+            {"asset_allocation_targets": {"pre_retirement": {"Equity": 0.7, "ETF": 0.3}}})
+        moves = {a["symbol"]: a["pct_change"] for a in out["suggestions"]}
+        assert moves["A"] == pytest.approx(0.12)      # 0.3 -> 0.42
+        assert moves["B"] == pytest.approx(0.08)      # 0.2 -> 0.28
+        assert moves["ETF1"] == pytest.approx(-0.2)   # 0.5 -> 0.3
+        assert sum(moves.values()) == pytest.approx(0.0)
+
+    def test_sector_targets_only_apply_to_stocks(self, monkeypatch):
+        out = self._run(monkeypatch,
+            [self._row("TECH", 400), self._row("BANK", 100, sector="Financial Services", industry="Banks"),
+             self._row("ETF1", 500, "ETF", "Unknown", "Unknown")],
+            {"asset_allocation_targets": {"pre_retirement": {"Equity": 0.5, "ETF": 0.5}},
+             "target_sector_allocation": {"Technology": 0.5, "Financial Services": 0.5}})
+        moves = {a["symbol"]: a["pct_change"] for a in out["suggestions"]}
+        assert "ETF1" not in moves                     # already on target, untouched by sector targets
+        assert moves["TECH"] == pytest.approx(-0.15)  # 0.40 -> 0.25
+        assert moves["BANK"] == pytest.approx(0.15)   # 0.10 -> 0.25
+        assert all(abs(m) <= 1 for m in moves.values())
+
+    def test_security_target_overrides_and_flags_risk(self, monkeypatch):
+        out = self._run(monkeypatch,
+            [self._row("A", 500), self._row("B", 500)],
+            {"target_security_allocation": {"A": 0.2}},
+            risk=[("2026-01-01", 1, 0.9), ("2026-01-01", 2, 0.1)])
+        by_sym = {a["symbol"]: a for a in out["suggestions"]}
+        assert by_sym["A"]["pct_change"] == pytest.approx(-0.3)
+        assert by_sym["B"]["pct_change"] == pytest.approx(0.3)
+        assert by_sym["A"]["impact_risk"] == pytest.approx(0.9)

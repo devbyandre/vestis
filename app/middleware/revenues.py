@@ -26,9 +26,22 @@ def calc_dividends_for_portfolio(portfolio_ids: Optional[list] = None, year: Opt
     is_buy = tx['type'].astype(str).str.lower() == 'buy'
     tx['qty_signed'] = tx['quantity'].where(is_buy, -tx['quantity'])
 
+    all_divs = db.get_dividends_many(tickers)
+    if all_divs.empty:
+        return pd.DataFrame(columns=['symbol','portfolio_id','date','dividend_per_share','shares','total','year'])
+    # Dividends are stored in the listing currency; report them in EUR at the
+    # rate of the payment date (one FX series per currency).
+    all_divs['date'] = pd.to_datetime(all_divs['date']).dt.tz_localize(None).dt.normalize()
+    all_divs['currency'] = all_divs['currency'].fillna('EUR')
+    start, end = all_divs['date'].min().strftime('%Y-%m-%d'), all_divs['date'].max().strftime('%Y-%m-%d')
+    rates = {cur: db.get_fx_series(cur, start, end) for cur in all_divs['currency'].unique()}
+    all_divs['dividend'] = [float(d) * float(rates[c].get(dt, 1.0))
+                            for d, c, dt in zip(all_divs['dividend'], all_divs['currency'], all_divs['date'])]
+    divs_by_symbol = dict(tuple(all_divs.groupby('symbol')))
+
     for sym in tickers:
-        df_divs = db.get_dividends(sym)
-        if df_divs.empty:
+        df_divs = divs_by_symbol.get(sym)
+        if df_divs is None or df_divs.empty:
             continue
 
         # Per portfolio: transaction dates and running net quantity, so each
@@ -98,7 +111,9 @@ def calc_capital_gains_fifo(portfolio_ids: Optional[list] = None, year: Optional
                 while remaining > 0 and buys.get(sym):
                     b = buys[sym][0]
                     take = min(b['qty'], remaining)
-                    cost_basis += take * b['price'] + (b['fees'] * (take / (b['qty'] if b['qty'] else 1)))
+                    fee_share = b['fees'] * take / b['qty'] if b['qty'] else 0.0
+                    cost_basis += take * b['price'] + fee_share
+                    b['fees'] -= fee_share
                     b['qty'] -= take
                     remaining -= take
                     if b['qty'] <= 1e-12:

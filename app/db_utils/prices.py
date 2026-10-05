@@ -64,7 +64,7 @@ def get_price_series(symbol: str, start_date=None, end_date=None) -> pd.DataFram
     df = df.sort_values("date")
     all_dates = pd.date_range(start=df["date"].min(), end=df["date"].max())
     df = df.set_index("date").reindex(all_dates).ffill().reset_index().rename(columns={"index": "date"})
-    df["price"] = df["adj_close"].combine_first(df["close"])
+    df["price"] = df["close"].combine_first(df["adj_close"])
 
     fx_series = get_fx_series(currency, df["date"].min().strftime("%Y-%m-%d"),
                               df["date"].max().strftime("%Y-%m-%d"))
@@ -90,7 +90,8 @@ def get_price_bars(symbol: str, lookback_days: int = 400) -> pd.DataFrame:
     weekends/holidays or convert to EUR. Technical signals (RSI, MA crosses,
     % moves) must be computed on this — otherwise FX moves leak into the
     indicator and window lengths silently cover fewer trading days.
-    Adds a 'price' column (adj_close, falling back to close).
+    Adds a 'price' column: the traded close (what price alerts are set against),
+    falling back to adj_close.
     """
     start = (pd.Timestamp.utcnow().normalize() - pd.Timedelta(days=lookback_days)).strftime("%Y-%m-%d")
     df = _read_sql("""
@@ -108,7 +109,7 @@ def get_price_bars(symbol: str, lookback_days: int = 400) -> pd.DataFrame:
     # store_prices writes 0.0 for missing values — treat those as missing
     adj = df["adj_close"].where(df["adj_close"] > 0)
     close = df["close"].where(df["close"] > 0)
-    df["price"] = adj.combine_first(close)
+    df["price"] = close.combine_first(adj)
     return df.dropna(subset=["price"]).reset_index(drop=True)
 
 

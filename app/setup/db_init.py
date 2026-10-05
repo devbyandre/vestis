@@ -242,6 +242,19 @@ DDL_STATEMENTS = [
         query       TEXT,
         FOREIGN KEY (security_id) REFERENCES securities(id)
     )""",
+
+    """CREATE TABLE IF NOT EXISTS market_news (
+        uid          TEXT    PRIMARY KEY,
+        title        TEXT    NOT NULL,
+        publisher    TEXT,
+        url          TEXT,
+        published_at TEXT    NOT NULL,
+        sentiment    REAL,
+        feed         TEXT,
+        fetched_at   TEXT    NOT NULL
+    )""",
+
+    "CREATE INDEX IF NOT EXISTS idx_market_news_published ON market_news (published_at)",
 ]
 
 
@@ -341,6 +354,21 @@ def init_db():
                     conn.execute(text("ALTER TABLE alerts ADD COLUMN state TEXT"))
         except Exception as exc:
             logging.warning(f"alerts.state migration skipped: {exc}")
+
+    # Migration: dividendYield used to be stored in percent. Where rate/price
+    # shows a row is still in percent, convert it to a fraction (idempotent).
+    try:
+        with engine.begin() as conn:
+            res = conn.execute(text("""
+                UPDATE securities_cache SET dividendYield = dividendYield / 100.0
+                WHERE dividendYield > 0 AND dividendRate > 0 AND regularMarketPrice > 0
+                  AND ABS(dividendYield - 100.0 * dividendRate / regularMarketPrice)
+                    < ABS(dividendYield - dividendRate / regularMarketPrice)
+            """))
+            if res.rowcount:
+                logging.info(f"Converted {res.rowcount} dividend yields from percent to fractions")
+    except Exception as exc:
+        logging.warning(f"dividendYield migration skipped: {exc}")
 
     # Migration (SQLite only): older fetches stored numpy int64 volumes as raw
     # 8-byte blobs, which crash JSON encoding in the price endpoints.

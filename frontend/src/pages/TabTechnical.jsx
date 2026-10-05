@@ -89,7 +89,7 @@ const FUNDAMENTALS_GROUPS = [
     ['Volatility', m => fmt.pct(m.metrics?.volatility)],
     ['Sharpe', m => m.metrics?.sharpe != null ? m.metrics.sharpe.toFixed(2) : '—'],
     ['Sortino', m => m.metrics?.sortino != null ? m.metrics.sortino.toFixed(2) : '—'],
-    ['Max Drawdown', m => fmt.pct(m.metrics?.max_drawdown)],
+    ['Max Drawdown', m => m.metrics?.max_drawdown != null ? fmt.pct(-Math.abs(m.metrics.max_drawdown)) : '—'],
     ['CAGR', m => fmt.pct(m.metrics?.cagr)],
     ['Calmar', m => m.metrics?.calmar != null ? m.metrics.calmar.toFixed(2) : '—'],
     ['Treynor', m => m.metrics?.treynor != null ? m.metrics.treynor.toFixed(2) : '—'],
@@ -416,7 +416,7 @@ function TechnicalDeepDive({ securities }) {
             <MetricCard label="Volatility" value={metrics.volatility != null ? fmt.pct(metrics.volatility) : '—'} color={metrics.volatility > 0.3 ? 'text-warning' : ''} />
             <MetricCard label="Sharpe" value={metrics.sharpe != null ? metrics.sharpe.toFixed(2) : '—'} color={metrics.sharpe < 0 ? 'text-red-400' : ''} />
             {metrics.sortino != null && <MetricCard label="Sortino" value={metrics.sortino.toFixed(2)} />}
-            <MetricCard label="Max DD" value={metrics.max_drawdown != null ? fmt.pct(metrics.max_drawdown) : '—'} color="text-red-400" />
+            <MetricCard label="Max DD" value={metrics.max_drawdown != null ? fmt.pct(-Math.abs(metrics.max_drawdown)) : '—'} color="text-red-400" />
           </div>
 
           {/* Price chart */}
@@ -462,7 +462,7 @@ function TechnicalDeepDive({ securities }) {
                 }] : []),
               ]}
               layout={{
-                ...BASE, title: { text: symbol, font: { color: '#d1d5db', size: 14 } },
+                ...BASE, title: { text: `${symbol} — in EUR`, font: { color: '#d1d5db', size: 14 } },
                 xaxis: { ...BASE.xaxis, rangeslider: { visible: false } },
                 yaxis: { ...BASE.yaxis, tickprefix: '€' },
                 legend: { bgcolor: 'transparent', font: { color: '#9ca3af', size: 10 }, orientation: 'h', y: -0.15 },
