@@ -8,6 +8,7 @@
 
 import os
 import logging
+import re
 from contextlib import contextmanager
 from typing import Optional
 
@@ -44,7 +45,8 @@ def _build_url() -> str:
 _DB_URL: str = _build_url()
 _IS_POSTGRES: bool = _DB_URL.startswith("postgresql") or _DB_URL.startswith("postgres")
 
-logging.info(f"db_utils: using {'PostgreSQL' if _IS_POSTGRES else 'SQLite'} → {_DB_URL[:60]}...")
+_SAFE_URL = re.sub(r"://([^:/@]+):[^@]*@", r"://\1:***@", _DB_URL)
+logging.info(f"db_utils: using {'PostgreSQL' if _IS_POSTGRES else 'SQLite'} → {_SAFE_URL[:80]}")
 
 # ── SQLAlchemy engine (used for pd.read_sql_query) ────────────────────────────
 from sqlalchemy import create_engine, text as sa_text

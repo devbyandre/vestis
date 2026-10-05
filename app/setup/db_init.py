@@ -255,6 +255,33 @@ def _pg(sql):
     return sql
 
 
+def _lowercase_quoted_columns(engine):
+    """Rename case-sensitive columns (e.g. "longName") to their lowercase form.
+
+    The DDL declares columns unquoted, so Postgres creates them lowercase and the
+    queries reference them unquoted. Databases whose columns were once renamed to
+    quoted camelCase would otherwise fail every query touching them.
+    """
+    from sqlalchemy import text
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT table_name, column_name FROM information_schema.columns
+            WHERE table_schema = current_schema() AND column_name <> lower(column_name)
+        """)).fetchall()
+        existing = {(t, c) for t, c in conn.execute(text(
+            "SELECT table_name, column_name FROM information_schema.columns "
+            "WHERE table_schema = current_schema()")).fetchall()}
+        renamed = 0
+        for table, col in rows:
+            if (table, col.lower()) in existing:
+                logging.warning(f'Not renaming {table}."{col}": a column "{col.lower()}" already exists')
+                continue
+            conn.execute(text(f'ALTER TABLE "{table}" RENAME COLUMN "{col}" TO "{col.lower()}"'))
+            renamed += 1
+    if renamed:
+        logging.info(f"Renamed {renamed} case-sensitive columns to lowercase")
+
+
 def init_db():
     from db_utils import get_engine
     engine = get_engine()
@@ -286,20 +313,21 @@ def init_db():
                 "COALESCE((SELECT MAX(id) FROM portfolios), 1))"
             ))
 
+        _lowercase_quoted_columns(engine)
+
         # Migration: operatingCashflow/freeCashflow were originally declared
         # INTEGER (max ~2.1B), too small for large-cap cashflow figures.
         # CREATE TABLE IF NOT EXISTS above won't widen an already-existing
         # column, so do it explicitly — safe/idempotent to rerun.
-        with engine.begin() as conn:
-            for col in ("operatingCashflow", "freeCashflow"):
-                try:
-                    # Unquoted: Postgres folds this to the actual (lowercase)
-                    # column name, same reasoning as elsewhere in db_utils.py.
+        for col in ("operatingCashflow", "freeCashflow"):
+            try:
+                with engine.begin() as conn:
+                    # Unquoted: Postgres folds this to the actual (lowercase) column name.
                     conn.execute(text(
                         f"ALTER TABLE securities_cache ALTER COLUMN {col} TYPE BIGINT"
                     ))
-                except Exception as exc:
-                    logging.warning(f"Column widen skipped for {col}: {exc}")
+            except Exception as exc:
+                logging.warning(f"Column widen skipped for {col}: {exc}")
 
     # Migration: alerts.state holds per-alert edge-trigger state (last side,
     # armed flag, last fired bar) so alerts fire on transitions, not levels.
