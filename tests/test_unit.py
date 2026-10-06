@@ -79,6 +79,7 @@ sys.modules.setdefault("db_utils", _fake_db)
 # config_utils also reads from disk — stub it too
 _fake_cfg = types.ModuleType("config_utils")
 _fake_cfg.get_config = lambda key: None
+_fake_cfg.set_config = lambda key, value: None
 _fake_cfg.safe_json_load = lambda v, default=None: default or {}
 sys.modules.setdefault("config_utils", _fake_cfg)
 
