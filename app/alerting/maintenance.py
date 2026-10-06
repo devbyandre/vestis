@@ -4,6 +4,8 @@ import logging
 
 import middleware as mw
 
+LEGACY_DIP_NOTE = "Price dip - potential buy"
+
 
 def ensure_alert(security_id, alert_type, params, note="",
                   notify_mode="immediate", cooldown_seconds=14400):
@@ -29,6 +31,18 @@ def maintain_alerts():
     except Exception:
         logging.exception("Could not load holdings for maintain_alerts")
         return
+
+    # An old version created "Price dip - potential buy" alerts with thresholds
+    # in the listing currency (alerts are evaluated in EUR); nothing creates
+    # them any more, so switch any remaining ones off.
+    try:
+        legacy = mw.get_automatic_alerts()
+        if not legacy.empty:
+            for _, alert in legacy[legacy['note'] == LEGACY_DIP_NOTE].iterrows():
+                mw.toggle_alert(int(alert['id']), False)
+                logging.info("Deactivated legacy price-dip alert %s", alert['id'])
+    except Exception:
+        logging.exception("Could not deactivate legacy price-dip alerts")
 
     # Deactivate automatic alerts for securities no longer held — otherwise
     # a price/trailing-stop alert created while a position was open keeps

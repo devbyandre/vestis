@@ -19,11 +19,6 @@ history of why they were proposed.
   their own, and the scorer reads English headlines only (most come out
   neutral). Swapping in an ML model only needs `score_headline` replaced.
 
-- **Legacy "Price dip - potential buy" alerts (S)** — automatic alerts from an
-  old version with thresholds in the listing currency (alerts are evaluated in
-  EUR). They no longer fire spuriously, but should be switched off or deleted
-  once the user confirms.
-
 - **Recurring/scheduled investments (DCA planner) (M)** — flagged as a
   backlog feature early on ("repeating investments"). UI-wise: a form on
   Transactions or Planning to define "invest €X in SYMBOL every N

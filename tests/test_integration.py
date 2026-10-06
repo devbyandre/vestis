@@ -414,3 +414,17 @@ class TestDedupeAutoAlerts:
         alerts = mw.get_all_alerts_for_ui()
         assert alerts["id"].astype(int).tolist() == [b]
         assert int(alerts.iloc[0]["active"]) == 0
+
+
+class TestLegacyDipAlerts:
+    def test_maintenance_switches_off_legacy_price_dip_alerts_only(self, mw, alerting, db_path, monkeypatch):
+        sec = seed_security(db_path, "NOVO-B.CO")
+        legacy = mw.create_alert(sec, "price", {"threshold": 326.75, "direction": "below"},
+                                 note="Price dip - potential buy", automatic=True)
+        manual = mw.create_alert(sec, "price", {"threshold": 20, "direction": "below"},
+                                 note="Price dip - potential buy")
+        monkeypatch.setattr(mw, "fetch_symbol_data", lambda symbol: {})
+        alerting.maintenance.maintain_alerts()
+        alerts = mw.get_all_alerts_for_ui().set_index("id")
+        assert int(alerts.loc[legacy, "active"]) == 0
+        assert int(alerts.loc[manual, "active"]) == 1      # user-created alerts are never touched
