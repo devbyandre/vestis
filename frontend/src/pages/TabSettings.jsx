@@ -70,6 +70,17 @@ export default function TabSettings() {
           <Field label="Max items" type="number" value={form.news_max_items} onChange={set('news_max_items')} />
           <Field label="Min fetch interval (min)" type="number" value={form.news_min_fetch_minutes} onChange={set('news_min_fetch_minutes')} />
         </div>
+        <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-300">
+          <input type="checkbox" checked={!!form.news_alerts} onChange={e => set('news_alerts')(e.target.checked)}
+            className="rounded border-surface-3 bg-surface-2" />
+          Send strongly worded headlines about my holdings to Telegram as they arrive
+        </label>
+        {form.news_alerts && (
+          <Field label="Minimum headline strength (0–1)" type="number" value={form.news_alert_threshold ?? 0.5}
+            onChange={set('news_alert_threshold')}
+            hint="Sentiment is a rough headline score; 0.5 sends only clearly positive or negative news. Quiet hours apply." />
+        )}
+        <p className="text-xs text-gray-600">The daily digest always lists the strongest headlines per holding.</p>
       </Section>
 
       <Section title="Telegram">

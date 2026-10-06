@@ -148,3 +148,16 @@ export const sentimentBadgeClass = (v) => {
 }
 
 export const fmtSentiment = (v) => (v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(2)}`)
+
+// "Allianz SE" -> "Allianz", "Novo Nordisk A/S" -> "Novo Nordisk" (as on the news side).
+const LEGAL = /[,.]?\s+(inc|incorporated|corp|corporation|co|company|ag|se|sa|nv|n\.v|plc|ltd|limited|holding|holdings|group|kgaa|& co|aktiengesellschaft|asa|a\/s|ab|oyj|spa|class [a-c])\.?$/i
+export function shortName(name) {
+  if (!name) return null
+  let n = String(name).replace(/\s*\(.*?\)/g, '').trim()
+  for (let i = 0; i < 4; i++) {
+    const next = n.replace(LEGAL, '').replace(/[\s,.-]+$/, '')
+    if (next === n) break
+    n = next
+  }
+  return n || name
+}

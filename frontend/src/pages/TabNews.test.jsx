@@ -37,6 +37,8 @@ describe('TabNews', () => {
     expect(screen.getByText('negative')).toBeInTheDocument()
     expect(screen.getByText('3 h ago')).toBeInTheDocument()
     expect(screen.getByText('no coverage')).toBeInTheDocument()
+    expect(screen.getAllByText('Apple').length).toBeGreaterThan(0)     // names, not just tickers
+    expect(screen.getAllByText('Tesla').length).toBeGreaterThan(0)
   })
 
   it('passes scope, days and symbol to the API', async () => {
@@ -52,7 +54,7 @@ describe('TabNews', () => {
 
     await user.click(screen.getByRole('button', { name: 'Holdings' }))
     await user.click(screen.getByRole('button', { name: '30 days' }))
-    await user.click(screen.getAllByRole('button', { name: /^AAPL/ })[0])
+    await user.click(screen.getAllByRole('button', { name: /^Apple/ })[0])
     await screen.findByRole('button', { name: /Refresh AAPL/ })
     expect(seen.at(-1)).toEqual({ scope: 'holdings', days: '30', symbol: 'AAPL' })
     expect(window.location.search).toContain('symbol=AAPL')

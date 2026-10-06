@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   fmt, pnlColor, pnlBg, sortBy, groupBy, clamp, kpiColor, temperatureBadgeClass,
-  distributionStats, normalPdf, linspace, timeAgo, sentimentLabel, fmtSentiment,
+  distributionStats, normalPdf, linspace, timeAgo, sentimentLabel, fmtSentiment, shortName,
 } from './utils'
 
 describe('fmt.currency', () => {
@@ -183,5 +183,16 @@ describe('sentimentLabel', () => {
     expect(fmtSentiment(0.5)).toBe('+0.50')
     expect(fmtSentiment(-0.25)).toBe('-0.25')
     expect(fmtSentiment(null)).toBe('—')
+  })
+})
+
+describe('shortName', () => {
+  it('drops legal forms and share classes', () => {
+    expect(shortName('Allianz SE')).toBe('Allianz')
+    expect(shortName('Novo Nordisk A/S')).toBe('Novo Nordisk')
+    expect(shortName('Henkel AG & Co. KGaA')).toBe('Henkel')
+    expect(shortName('Alibaba Group Holding Limited')).toBe('Alibaba')
+    expect(shortName('iShares Core MSCI World UCITS ETF USD (Acc)')).toBe('iShares Core MSCI World UCITS ETF USD')
+    expect(shortName(null)).toBe(null)
   })
 })

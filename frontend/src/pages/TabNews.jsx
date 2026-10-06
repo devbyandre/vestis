@@ -6,7 +6,7 @@ import { clsx } from 'clsx'
 import toast from 'react-hot-toast'
 import { newsApi } from '../lib/api'
 import { qk } from '../lib/queryClient'
-import { timeAgo, sentimentLabel, sentimentBadgeClass, fmtSentiment } from '../lib/utils'
+import { timeAgo, sentimentLabel, sentimentBadgeClass, fmtSentiment, shortName } from '../lib/utils'
 import { useUrlParam, setUrlParams } from '../lib/urlState'
 import { LoadingOverlay, ErrorMsg, SectionHeader, MetricCard } from '../components/ui'
 
@@ -48,7 +48,10 @@ function SecurityRow({ row, active, onSelect }) {
       className={clsx('w-full text-left px-3 py-2 rounded border transition-colors',
         active ? 'border-accent bg-accent/5' : 'border-transparent hover:bg-surface-2')}>
       <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-medium text-gray-200 truncate">{row.symbol}</span>
+        <span className="min-w-0 truncate" title={row.name || row.symbol}>
+          <span className="text-sm font-medium text-gray-200">{shortName(row.name) || row.symbol}</span>
+          {row.name && <span className="ml-1.5 text-xs text-gray-500">{row.symbol}</span>}
+        </span>
         {covered
           ? <span className={clsx('badge', sentimentBadgeClass(row.avg_sentiment))}>{fmtSentiment(row.avg_sentiment)}</span>
           : <span className="text-xs text-gray-600">no coverage</span>}
@@ -66,7 +69,7 @@ function SecurityRow({ row, active, onSelect }) {
   )
 }
 
-function Article({ item, onSelectSymbol }) {
+function Article({ item, names, onSelectSymbol }) {
   const label = sentimentLabel(item.sentiment)
   return (
     <article className="card py-3">
@@ -86,8 +89,8 @@ function Article({ item, onSelectSymbol }) {
         <span title={item.published_at}>{timeAgo(item.published_at)}</span>
         {item.symbols.map(s => (
           <button key={s} type="button" className="badge bg-surface-3 text-gray-400 cursor-pointer"
-            onClick={() => onSelectSymbol(s)}>
-            {s}
+            title={names[s] ? `${names[s]} (${s})` : s} onClick={() => onSelectSymbol(s)}>
+            {shortName(names[s]) || s}
           </button>
         ))}
       </div>
@@ -133,6 +136,10 @@ export default function TabNews() {
   const overall = data?.overall
   const selectSymbol = s => setSymbol(s === symbol ? '' : s)
   const isMarket = scope === 'market'
+  // Keep names from the last per-security response so the Market view's tags still resolve.
+  const namesRef = useRef({})
+  summary.forEach(r => { if (r.name) namesRef.current[r.symbol] = r.name })
+  const names = namesRef.current
 
   return (
     <div className="space-y-5">
@@ -154,7 +161,7 @@ export default function TabNews() {
           onChange={d => setDaysParam(String(d))} />
         {symbol && (
           <div className="flex items-center gap-2">
-            <span className="badge badge-blue">{symbol}</span>
+            <span className="badge badge-blue" title={symbol}>{shortName(names[symbol]) || symbol}</span>
             <button className="text-xs text-gray-500 hover:text-gray-300" onClick={() => setSymbol('')}>clear</button>
             <button className="text-xs text-accent-bright flex items-center gap-1"
               onClick={() => setUrlParams({ tab: 'technical', symbol }, { push: true })}>
@@ -212,7 +219,7 @@ export default function TabNews() {
                   <p className="text-xs mt-1">Use Refresh to fetch the latest ones, or widen the time range.</p>
                 </div>
               ) : items.map(it => (
-                <Article key={it.uid} item={it} onSelectSymbol={selectSymbol} />
+                <Article key={it.uid} item={it} names={names} onSelectSymbol={selectSymbol} />
               ))}
             </div>
           </div>

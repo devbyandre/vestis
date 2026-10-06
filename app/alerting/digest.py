@@ -8,6 +8,7 @@ import pandas as pd
 import middleware as mw
 from config_utils import get_config, set_config
 from .messages import md, vestis_link, describe_alert
+from .news_updates import news_digest_lines
 
 Notify = Callable[[str, Optional[tuple]], bool]
 
@@ -129,6 +130,12 @@ def send_digest(notify: Notify, freq: str = "daily") -> None:
 
     except Exception:
         logging.exception("Error building portfolio snapshot for digest")
+
+    # ── News on holdings since last digest ────────────────────────────────
+    try:
+        parts.extend(news_digest_lines(since_ts))
+    except Exception:
+        logging.exception("Digest: news section failed")
 
     # ── Alerts fired since last digest ────────────────────────────────────
     try:

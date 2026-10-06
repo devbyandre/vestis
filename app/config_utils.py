@@ -38,6 +38,8 @@ DEFAULT = {
     "yf_base_sleep_sec": 0.8,
     "news_max_items": 50,
     "news_min_fetch_minutes": 30,
+    "news_alerts": False,
+    "news_alert_threshold": 0.5,
     "price_refresh_minutes": 60,
     "price_refresh_hour_utc": 22,
     "dcf_projection_years": 10,

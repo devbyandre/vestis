@@ -129,3 +129,18 @@ def delete_market_news_older_than(before: str) -> int:
         cur = conn.cursor()
         cur.execute(sql, (before,))
         return cur.rowcount
+
+
+def get_news_fetched_since(fetched_since: str, security_ids: List[int]) -> pd.DataFrame:
+    """Headlines stored after `fetched_since` (ISO) for the given securities."""
+    if not security_ids:
+        return pd.DataFrame(columns=["security_id", "symbol", "uid", "title", "publisher",
+                                     "url", "published_at", "sentiment", "fetched_at"])
+    ph = ",".join("?" * len(security_ids))
+    return _read_sql(f"""
+        SELECT n.security_id, s.yahoo_ticker AS symbol, n.uid, n.title, n.publisher,
+               n.url, n.published_at, n.sentiment, n.fetched_at
+        FROM news n JOIN securities s ON s.id = n.security_id
+        WHERE n.fetched_at > ? AND n.security_id IN ({ph})
+        ORDER BY n.fetched_at
+    """, tuple([fetched_since] + [int(i) for i in security_ids]))

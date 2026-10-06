@@ -1,6 +1,8 @@
 """alerting package: digest wiring and the telegram_worker entry point."""
 import sys
 
+import pandas as pd
+
 from tests.conftest import seed, seed_security
 
 
@@ -89,3 +91,67 @@ class TestSecurityCacheRow:
         sec_id = seed_security(db_path, "SAP")
         self._cache(db_path, sec_id, None, "EUR")
         assert mw.alerts._currency({"security_id": sec_id}) == "EUR"
+
+
+class TestNewsUpdates:
+    def _setup(self, mw, alerting, db_path, monkeypatch, cfg):
+        held = seed_security(db_path, "ALV.DE")
+        seed(db_path, "INSERT INTO securities_cache (security_id, longName) VALUES (?, 'Allianz SE')", (held,))
+        seed(db_path, "INSERT INTO transactions (portfolio_id, security_id, date, type, quantity, price) "
+                      "VALUES (1, ?, '2024-01-02', 'buy', 5, 100)", (held,))
+        nu = alerting.news_updates
+        monkeypatch.setattr(nu, "get_config", lambda k: cfg.get(k))
+        monkeypatch.setattr(nu, "set_config", lambda k, v: cfg.__setitem__(k, v))
+        monkeypatch.setattr(nu, "quiet_hours_active", lambda: False)
+        return held, nu
+
+    def _store(self, mw, held, rows, fetched_at):
+        mw.db.upsert_news(held, [{"uid": u, "title": t, "publisher": "Wire", "url": f"https://x/{u}",
+                                  "published_at": "2026-10-05T08:00:00", "sentiment": s} for u, t, s in rows],
+                          fetched_at)
+
+    def test_off_by_default(self, mw, alerting, db_path, monkeypatch):
+        cfg, sent = {}, []
+        held, nu = self._setup(mw, alerting, db_path, monkeypatch, cfg)
+        assert nu.send_news_alerts(lambda t, l=None: sent.append(t) or True) == 0 and not sent
+
+    def test_sends_only_new_strong_headlines_once(self, mw, alerting, db_path, monkeypatch):
+        cfg, sent = {"news_alerts": True}, []
+        held, nu = self._setup(mw, alerting, db_path, monkeypatch, cfg)
+        notify = lambda t, l=None: sent.append(t) or True
+        self._store(mw, held, [("old", "Allianz record profit", 0.9)], "2026-10-05T07:00:00")
+        nu.send_news_alerts(notify, now=pd.Timestamp("2026-10-05T07:30:00"))    # first run: no backlog
+        assert not sent and cfg["news_alerts_sent_until"] == "2026-10-05T07:30:00"
+
+        self._store(mw, held, [("a", "Allianz beats estimates", 0.8), ("b", "Allianz board meets", 0.0)],
+                    "2026-10-05T08:15:00")
+        assert nu.send_news_alerts(notify) == 1
+        assert "Allianz beats estimates" in sent[0] and "board meets" not in sent[0]
+        assert "*Allianz*" in sent[0]                       # short company name, not the ticker
+        assert nu.send_news_alerts(notify) == 0 and len(sent) == 1   # not repeated
+
+    def test_quiet_hours_and_failed_sends_keep_items_for_later(self, mw, alerting, db_path, monkeypatch):
+        cfg = {"news_alerts": True, "news_alerts_sent_until": "2026-10-05T00:00:00"}
+        held, nu = self._setup(mw, alerting, db_path, monkeypatch, cfg)
+        self._store(mw, held, [("a", "Allianz shares plunge", -0.8)], "2026-10-05T08:15:00")
+        monkeypatch.setattr(nu, "quiet_hours_active", lambda: True)
+        assert nu.send_news_alerts(lambda t, l=None: True) == 0
+        monkeypatch.setattr(nu, "quiet_hours_active", lambda: False)
+        assert nu.send_news_alerts(lambda t, l=None: False) == 0                 # send failed
+        assert cfg["news_alerts_sent_until"] == "2026-10-05T00:00:00"
+        sent = []
+        assert nu.send_news_alerts(lambda t, l=None: sent.append(t) or True) == 1
+        assert "📉" in sent[0]
+
+    def test_digest_lists_strongest_headline_per_holding(self, mw, alerting, db_path, monkeypatch):
+        held, nu = self._setup(mw, alerting, db_path, monkeypatch, {})
+        recent = (pd.Timestamp.utcnow().replace(tzinfo=None) - pd.Timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S")
+        mw.db.upsert_news(held, [
+            {"uid": "a", "title": "Allianz beats estimates", "publisher": "Wire", "url": "https://x/a",
+             "published_at": recent, "sentiment": 0.8},
+            {"uid": "b", "title": "Allianz gains", "publisher": "Wire", "url": "https://x/b",
+             "published_at": recent, "sentiment": 0.5},
+        ], recent)
+        lines = nu.news_digest_lines(pd.Timestamp.utcnow().replace(tzinfo=None) - pd.Timedelta(days=1))
+        assert lines[0].startswith("📰") and len(lines) == 3      # header, one item, blank
+        assert "[Allianz beats estimates](https://x/a)" in lines[1]

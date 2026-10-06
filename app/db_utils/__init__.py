@@ -139,6 +139,7 @@ from .fx import (
 
 from .news import (
     upsert_market_news,
+    get_news_fetched_since,
     get_market_news,
     delete_market_news_older_than,
     list_news_targets,

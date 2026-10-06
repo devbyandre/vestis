@@ -11,6 +11,7 @@ import telegram_client as tg
 from alerting.digest import send_digest
 from alerting.engine import run_immediate
 from alerting.maintenance import maintain_alerts
+from alerting.news_updates import send_news_alerts
 from alerting.messages import vestis_link
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -46,6 +47,10 @@ def main():
         notify = make_notifier(args.token, args.chat)
         if notify:
             run_immediate(notify)
+            try:
+                send_news_alerts(notify)
+            except Exception:
+                logging.exception("News alerts failed")
             if args.digest:
                 send_digest(notify, args.digest)
     except Exception as e:
