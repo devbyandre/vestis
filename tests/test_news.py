@@ -31,6 +31,7 @@ def offline_sources(monkeypatch):
     import news_sources
     monkeypatch.setattr(news_sources, "market_feeds", lambda feeds=None: [])
     monkeypatch.setattr(news_sources, "google_news", lambda name, days=7, count=10: [])
+    monkeypatch.setattr(news_sources, "page_abstract", lambda url, title="": None)
     return news_sources
 
 
@@ -320,3 +321,45 @@ class TestMarketNews:
         assert [i["uid"] for i in feed["items"]] == ["rss:1", "rss:2"]
         held = mw.get_news_feed(symbol="HELD")
         assert [i["title"] for i in held["items"]] == ["Held Corp soars on deal"]
+
+
+
+class TestAbstracts:
+    def test_abstract_shifts_a_neutral_headline(self):
+        from sentiment import score_article, score_headline
+        title = "Allianz board meets"
+        assert score_headline(title)[0] == 0.0
+        assert score_article(title, "Shares fell after the insurer cut its outlook and warned on demand.")[1] == "negative"
+        assert score_article(title, None) == score_headline(title)
+        # the headline counts double: one positive headline cue outweighs one negative abstract cue
+        assert score_article("Nvidia beats", "Some analysts see a slowdown risk.")[0] > 0
+
+    def test_feed_descriptions_become_abstracts_but_link_only_ones_do_not(self):
+        import news_sources
+        body = b"""<rss><channel>
+          <item><title>Oil slips</title><link>https://e.com/1</link><guid>1</guid>
+            <pubDate>Mon, 05 Oct 2026 08:00:00 GMT</pubDate>
+            <description>&lt;p&gt;Crude prices fell sharply as demand worries weighed on markets.&lt;/p&gt;</description></item>
+          <item><title>Allianz news</title><link>https://e.com/2</link><guid>2</guid>
+            <pubDate>Mon, 05 Oct 2026 08:00:00 GMT</pubDate>
+            <description>&lt;a href="https://news.google.com/x"&gt;Allianz news&lt;/a&gt;</description></item>
+        </channel></rss>"""
+        a, b = news_sources.parse_rss(body)
+        assert a["summary"] == "Crude prices fell sharply as demand worries weighed on markets."
+        assert a["sentiment"] < 0
+        assert b["summary"] is None
+
+    def test_page_abstracts_fetched_once_for_new_articles_within_budget(self, nf, db, universe, offline_sources, monkeypatch):
+        calls = []
+        def fake_abstract(url, title=""):
+            calls.append(url)
+            return "Profit surged to a record as demand jumped."
+        monkeypatch.setattr(offline_sources, "page_abstract", fake_abstract)
+        items = [_item("a", "Held Corp update"), _item("b", "Held Corp note")]
+        left = nf._add_abstracts(universe["held"], items, budget=1)
+        assert left == 0 and len(calls) == 1
+        assert items[0]["summary"] and items[0]["sentiment"] > 0 and "summary" not in items[1]
+        db.upsert_news(universe["held"], items[:1], "t")
+        calls.clear()
+        nf._add_abstracts(universe["held"], [_item("a", "Held Corp update")], budget=5)
+        assert calls == []                      # already stored with an abstract

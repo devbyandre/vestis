@@ -8,6 +8,7 @@ news_sources.py — headline sources besides Yahoo's ticker search.
 """
 import email.utils
 import hashlib
+import html
 import re
 import xml.etree.ElementTree as ET
 from typing import Dict, Iterable, List, Optional
@@ -16,7 +17,7 @@ from urllib.parse import quote_plus
 import pandas as pd
 import requests
 
-from sentiment import score_headline
+from sentiment import score_article
 
 DEFAULT_FEEDS = {
     "CNBC Markets": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",
@@ -98,7 +99,8 @@ def parse_rss(body: bytes, default_publisher: Optional[str] = None) -> List[dict
         publisher = (source.text.strip() if source is not None and source.text else None) or default_publisher
         if publisher and title.endswith(f" - {publisher}"):
             title = title[: -len(publisher) - 3].strip()
-        score, _ = score_headline(title)
+        summary = clean_abstract(item.findtext("description"), title)
+        score, _ = score_article(title, summary)
         out.append({
             "uid": "rss:" + hashlib.sha1(guid.encode("utf-8")).hexdigest(),
             "title": title,
@@ -106,8 +108,45 @@ def parse_rss(body: bytes, default_publisher: Optional[str] = None) -> List[dict
             "url": link,
             "published_at": published.strftime("%Y-%m-%dT%H:%M:%S"),
             "sentiment": score,
+            "summary": summary,
         })
     return out
+
+
+ABSTRACT_MAX = 400
+
+
+def clean_abstract(raw: Optional[str], title: str = "") -> Optional[str]:
+    """Plain-text abstract from a feed description or page meta tag, or None.
+
+    Google News descriptions are only a link back to the headline, so anything
+    that is just markup, repeats the title or is too short is dropped.
+    """
+    if not raw:
+        return None
+    text = html.unescape(re.sub(r"<[^>]+>", " ", raw))
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) < 30 or text.lower().startswith(title.lower()[:40]) and len(text) < len(title) + 40:
+        return None
+    return text[:ABSTRACT_MAX].rsplit(" ", 1)[0] + "…" if len(text) > ABSTRACT_MAX else text
+
+
+_META = re.compile(r'<meta[^>]+(?:property|name)=["\'](?:og:description|description)["\'][^>]*>', re.I)
+_CONTENT = re.compile(r'content=["\']([^"\']*)["\']', re.I)
+
+
+def page_abstract(url: Optional[str], title: str = "") -> Optional[str]:
+    """The description an article page publishes for link previews (og:description)."""
+    url = _safe_url(url)
+    if not url or "news.google.com" in url:
+        return None
+    body = fetch(url, timeout=8.0)[:400_000].decode("utf-8", errors="ignore")
+    for tag in _META.findall(body):
+        m = _CONTENT.search(tag)
+        abstract = clean_abstract(m.group(1), title) if m else None
+        if abstract:
+            return abstract
+    return None
 
 
 def _name_pattern(name: str) -> re.Pattern:

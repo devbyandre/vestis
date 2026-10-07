@@ -229,6 +229,7 @@ DDL_STATEMENTS = [
         published_at TEXT    NOT NULL,
         sentiment    REAL,
         fetched_at   TEXT    NOT NULL,
+        summary      TEXT,
         UNIQUE (security_id, uid),
         FOREIGN KEY (security_id) REFERENCES securities(id)
     )""",
@@ -251,7 +252,8 @@ DDL_STATEMENTS = [
         published_at TEXT    NOT NULL,
         sentiment    REAL,
         feed         TEXT,
-        fetched_at   TEXT    NOT NULL
+        fetched_at   TEXT    NOT NULL,
+        summary      TEXT
     )""",
 
     "CREATE INDEX IF NOT EXISTS idx_market_news_published ON market_news (published_at)",
@@ -354,6 +356,19 @@ def init_db():
                     conn.execute(text("ALTER TABLE alerts ADD COLUMN state TEXT"))
         except Exception as exc:
             logging.warning(f"alerts.state migration skipped: {exc}")
+
+    # Migration: news abstracts (headline + abstract sentiment). Adds empty columns only.
+    for table in ("news", "market_news"):
+        try:
+            with engine.begin() as conn:
+                if is_postgres:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS summary TEXT"))
+                else:
+                    cols = [r[1] for r in conn.execute(text(f"PRAGMA table_info({table})"))]
+                    if "summary" not in cols:
+                        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN summary TEXT"))
+        except Exception as exc:
+            logging.warning(f"{table}.summary migration skipped: {exc}")
 
     # Migration: dividendYield used to be stored in percent. Where rate/price
     # shows a row is still in percent, convert it to a fraction (idempotent).

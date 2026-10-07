@@ -87,6 +87,7 @@ def _item(row, symbols) -> dict:
         "uid": row["uid"], "title": row["title"], "publisher": row["publisher"],
         "url": row["url"], "published_at": _z(row["published_at"]),
         "sentiment": sentiment, "label": label_for(sentiment), "symbols": symbols,
+        "summary": row.get("summary") if isinstance(row.get("summary"), str) else None,
     }
 
 

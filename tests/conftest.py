@@ -211,6 +211,7 @@ def apply_schema(conn):
             published_at TEXT    NOT NULL,
             sentiment    REAL,
             fetched_at   TEXT    NOT NULL,
+            summary      TEXT,
             UNIQUE (security_id, uid)
         );
 
@@ -229,7 +230,8 @@ def apply_schema(conn):
             published_at TEXT    NOT NULL,
             sentiment    REAL,
             feed         TEXT,
-            fetched_at   TEXT    NOT NULL
+            fetched_at   TEXT    NOT NULL,
+            summary      TEXT
         );
     """)
     conn.commit()

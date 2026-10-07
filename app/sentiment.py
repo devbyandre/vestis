@@ -1,12 +1,13 @@
 """Headline sentiment: a small finance-tuned lexicon scorer (no ML, no extra deps).
 
-Scores a headline in [-1, 1]. It is deliberately simple and transparent: count
-weighted positive/negative cues, flip a cue that follows a negation, soften
-questions. It reads headlines only, so treat it as a rough mood indicator.
+Scores a headline (optionally with its abstract) in [-1, 1]. It is
+deliberately simple and transparent: count weighted positive/negative cues,
+flip a cue that follows a negation, soften questions. It never reads the full
+article, so treat it as a rough mood indicator.
 """
 import math
 import re
-from typing import Tuple
+from typing import Optional, Tuple
 
 POSITIVE_THRESHOLD = 0.2
 
@@ -66,13 +67,10 @@ _NEG_FORMS = {f for w in _NEG for f in _forms(w)} | {"fell", "fallen", "sank", "
 _POS_FORMS -= _NEG_FORMS
 
 
-def score_headline(text: str) -> Tuple[float, str]:
-    """Return (score in [-1, 1], label in {'positive', 'negative', 'neutral'})."""
-    if not text:
-        return 0.0, "neutral"
+def _cues(text: str) -> Tuple[float, float]:
+    """(positive, negative) cue weights in a piece of text."""
     s = text.lower().replace("’", "'")
     pos = neg = 0.0
-
     for rx, weight in _PHRASE_RE:
         hits = len(rx.findall(s))
         if hits:
@@ -82,9 +80,8 @@ def score_headline(text: str) -> Tuple[float, str]:
                 neg += -weight * hits
             s = rx.sub(" ", s)
 
-    tokens = _TOKEN_RE.findall(s)
     negate_left = 0
-    for tok in tokens:
+    for tok in _TOKEN_RE.findall(s):
         if tok in _NEGATORS or tok.endswith("n't"):
             negate_left = _NEGATION_WINDOW
             continue
@@ -99,15 +96,41 @@ def score_headline(text: str) -> Tuple[float, str]:
             negate_left = 0
         elif negate_left:
             negate_left -= 1
+    return pos, neg
 
+
+def _finish(pos: float, neg: float, question: bool) -> Tuple[float, str]:
     score = (pos - neg) / (pos + neg + 1.0)
-    if text.rstrip().endswith("?"):
+    if question:
         score *= 0.5
-    score = max(-1.0, min(1.0, score))
-    score = round(score, 3)
+    score = round(max(-1.0, min(1.0, score)), 3)
     if math.isclose(score, 0.0, abs_tol=1e-9):
         score = 0.0
     return score, label_for(score)
+
+
+def score_headline(text: str) -> Tuple[float, str]:
+    """Return (score in [-1, 1], label in {'positive', 'negative', 'neutral'})."""
+    if not text:
+        return 0.0, "neutral"
+    pos, neg = _cues(text)
+    return _finish(pos, neg, text.rstrip().endswith("?"))
+
+
+HEADLINE_WEIGHT = 2.0
+
+
+def score_article(title: str, summary: Optional[str] = None) -> Tuple[float, str]:
+    """Score a headline together with its abstract; the headline counts double.
+
+    Without an abstract this is exactly score_headline(title).
+    """
+    if not summary or not summary.strip():
+        return score_headline(title)
+    t_pos, t_neg = _cues(title or "")
+    s_pos, s_neg = _cues(summary)
+    return _finish(HEADLINE_WEIGHT * t_pos + s_pos, HEADLINE_WEIGHT * t_neg + s_neg,
+                   (title or "").rstrip().endswith("?"))
 
 
 def label_for(score: float) -> str:

@@ -80,10 +80,11 @@ function Article({ item, names, onSelectSymbol }) {
           <ExternalLink size={12} className="mt-1 shrink-0 text-gray-600" />
         </a>
         <span className={clsx('badge shrink-0', sentimentBadgeClass(item.sentiment))}
-          title={`Headline score ${fmtSentiment(item.sentiment)}`}>
+          title={`${item.summary ? 'Headline + abstract' : 'Headline'} score ${fmtSentiment(item.sentiment)}`}>
           {label}
         </span>
       </div>
+      {item.summary && <p className="mt-1.5 text-xs text-gray-400 line-clamp-2">{item.summary}</p>}
       <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
         {item.publisher && <span>{item.publisher}</span>}
         <span title={item.published_at}>{timeAgo(item.published_at)}</span>
@@ -145,7 +146,7 @@ export default function TabNews() {
     <div className="space-y-5">
       <SectionHeader
         title="News & Sentiment"
-        subtitle="Recent headlines for your holdings and watchlist, scored from the headline text only"
+        subtitle="Recent headlines for your holdings and watchlist, scored from the headline and, where available, its abstract"
         action={
           <button className="btn-ghost text-xs flex items-center gap-1.5"
             disabled={refresh.isPending} onClick={() => refresh.mutate()}>

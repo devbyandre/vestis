@@ -43,13 +43,16 @@ def upsert_news(security_id: int, items: List[dict], fetched_at: str) -> int:
     if not items:
         return 0
     sql = _adapt_sql("""
-        INSERT INTO news (security_id, uid, title, publisher, url, published_at, sentiment, fetched_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO news (security_id, uid, title, publisher, url, published_at, sentiment, fetched_at, summary)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (security_id, uid) DO UPDATE SET
-            title = EXCLUDED.title, sentiment = EXCLUDED.sentiment
+            title = EXCLUDED.title,
+            summary = COALESCE(EXCLUDED.summary, news.summary),
+            sentiment = CASE WHEN EXCLUDED.summary IS NULL AND news.summary IS NOT NULL
+                             THEN news.sentiment ELSE EXCLUDED.sentiment END
     """)
     rows = [(security_id, it["uid"], it["title"], it.get("publisher"), it.get("url"),
-             it["published_at"], it.get("sentiment"), fetched_at) for it in items]
+             it["published_at"], it.get("sentiment"), fetched_at, it.get("summary")) for it in items]
     with get_conn() as conn:
         cur = conn.cursor()
         cur.executemany(sql, rows)
@@ -77,13 +80,13 @@ def get_news(since: str, security_ids: Optional[List[int]] = None, limit: int = 
     if security_ids is not None:
         if not security_ids:
             return pd.DataFrame(columns=["security_id", "symbol", "uid", "title", "publisher",
-                                         "url", "published_at", "sentiment"])
+                                         "url", "published_at", "sentiment", "summary"])
         where.append("n.security_id IN (%s)" % ",".join("?" * len(security_ids)))
         params += [int(i) for i in security_ids]
     params.append(int(limit))
     return _read_sql(f"""
         SELECT n.security_id, s.yahoo_ticker AS symbol, n.uid, n.title, n.publisher,
-               n.url, n.published_at, n.sentiment
+               n.url, n.published_at, n.sentiment, n.summary
         FROM news n JOIN securities s ON s.id = n.security_id
         WHERE {' AND '.join(where)}
         ORDER BY n.published_at DESC
@@ -104,12 +107,13 @@ def upsert_market_news(items: List[dict], fetched_at: str) -> int:
     if not items:
         return 0
     sql = _adapt_sql("""
-        INSERT INTO market_news (uid, title, publisher, url, published_at, sentiment, feed, fetched_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (uid) DO UPDATE SET title = EXCLUDED.title, sentiment = EXCLUDED.sentiment
+        INSERT INTO market_news (uid, title, publisher, url, published_at, sentiment, feed, fetched_at, summary)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (uid) DO UPDATE SET title = EXCLUDED.title, sentiment = EXCLUDED.sentiment,
+            summary = COALESCE(EXCLUDED.summary, market_news.summary)
     """)
     rows = [(it["uid"], it["title"], it.get("publisher"), it.get("url"), it["published_at"],
-             it.get("sentiment"), it.get("feed"), fetched_at) for it in items]
+             it.get("sentiment"), it.get("feed"), fetched_at, it.get("summary")) for it in items]
     with get_conn() as conn:
         conn.cursor().executemany(sql, rows)
     return len(rows)
@@ -117,7 +121,7 @@ def upsert_market_news(items: List[dict], fetched_at: str) -> int:
 
 def get_market_news(since: str, limit: int = 500) -> pd.DataFrame:
     return _read_sql("""
-        SELECT uid, title, publisher, url, published_at, sentiment, feed
+        SELECT uid, title, publisher, url, published_at, sentiment, feed, summary
         FROM market_news WHERE published_at >= ?
         ORDER BY published_at DESC LIMIT ?
     """, (since, int(limit)))
@@ -144,3 +148,9 @@ def get_news_fetched_since(fetched_since: str, security_ids: List[int]) -> pd.Da
         WHERE n.fetched_at > ? AND n.security_id IN ({ph})
         ORDER BY n.fetched_at
     """, tuple([fetched_since] + [int(i) for i in security_ids]))
+
+
+def get_news_uids(security_id: int) -> set:
+    """uids already stored for a security (to skip re-fetching their abstracts)."""
+    df = _read_sql("SELECT uid FROM news WHERE security_id = ? AND summary IS NOT NULL", (int(security_id),))
+    return set(df["uid"])

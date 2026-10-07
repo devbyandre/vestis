@@ -22,11 +22,12 @@ import pandas as pd
 import db_utils as db
 from config_utils import get_config
 import news_sources
-from sentiment import score_headline
+from sentiment import score_article, score_headline
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
 RETENTION_DAYS = 30
+ABSTRACT_BUDGET = 60            # article pages fetched per run for missing abstracts
 EMPTY_RECHECK_MINUTES = 360     # symbols with no coverage are only re-checked every 6h
 FETCH_COUNT = 10
 MAX_CONSECUTIVE_ERRORS = 3      # stop the run early when Yahoo starts refusing us
@@ -146,6 +147,28 @@ def refresh_market_news(targets: pd.DataFrame, stamp: str) -> dict:
     return {"market": len(items), "attached": attached}
 
 
+def _add_abstracts(security_id: int, items: List[dict], budget: int) -> int:
+    """Give new articles without an abstract the one their page publishes and
+    re-score them on headline + abstract. Returns the remaining page budget."""
+    if budget <= 0:
+        return budget
+    known = db.get_news_uids(security_id)
+    for it in items:
+        if budget <= 0:
+            break
+        if it.get("summary") or it["uid"] in known or not it.get("url"):
+            continue
+        budget -= 1
+        try:
+            it["summary"] = news_sources.page_abstract(it["url"], it["title"])
+        except Exception as exc:
+            logging.debug("No abstract for %s: %s", it["url"], exc)
+            continue
+        if it["summary"]:
+            it["sentiment"], _ = score_article(it["title"], it["summary"])
+    return budget
+
+
 def _last_fetches() -> Dict[int, Tuple[pd.Timestamp, int]]:
     log = db.get_news_fetch_log()
     return {int(r.security_id): (pd.Timestamp(r.fetched_at), int(r.items or 0))
@@ -189,6 +212,7 @@ def _refresh(symbol, force, fetch, sleep, market=None) -> dict:
     last = _last_fetches()
 
     stats = {"checked": 0, "skipped": 0, "stored": 0, "errors": 0, "pruned": 0}
+    budget = ABSTRACT_BUDGET
     consecutive_errors = 0
     for t in targets.itertuples():
         sid = int(t.security_id)
@@ -208,6 +232,7 @@ def _refresh(symbol, force, fetch, sleep, market=None) -> dict:
                 break
             continue
         consecutive_errors = 0
+        budget = _add_abstracts(sid, items, budget)
         stamp = _iso(_utcnow())
         db.upsert_news(sid, items, stamp)
         db.record_news_fetch(sid, len(items), query, stamp)
