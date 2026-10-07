@@ -80,7 +80,7 @@ export default function TabSettings() {
             onChange={set('news_alert_threshold')}
             hint="Sentiment is a rough headline score; 0.5 sends only clearly positive or negative news. Quiet hours apply." />
         )}
-        <p className="text-xs text-gray-600">The daily digest always lists the strongest headlines per holding.</p>
+        <p className="text-xs text-gray-600">The daily digest always groups news by holding: an overall verdict (critical, negative, mixed, positive), the mix of positive/negative/neutral headlines and the strongest ones, worst first.</p>
       </Section>
 
       <Section title="Telegram">

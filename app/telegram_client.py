@@ -42,6 +42,31 @@ def get_vestis_url() -> str:
     return (os.environ.get("VESTIS_URL") or get_config("vestis_url") or "").strip().rstrip("/")
 
 
+MAX_MESSAGE = 3900   # Telegram's limit is 4096; leave room for the appended link fallback
+
+
+def split_message(text: str, limit: int = MAX_MESSAGE) -> list:
+    """Split at line breaks (a Markdown entity never spans lines here) into parts under `limit`."""
+    if len(text) <= limit:
+        return [text]
+    parts, current = [], ""
+    for line in text.split("\n"):
+        while len(line) > limit:                     # a single overlong line: hard cut
+            if current:
+                parts.append(current)
+                current = ""
+            parts.append(line[:limit])
+            line = line[limit:]
+        if current and len(current) + 1 + len(line) > limit:
+            parts.append(current)
+            current = line
+        else:
+            current = f"{current}\n{line}" if current else line
+    if current:
+        parts.append(current)
+    return parts
+
+
 def send_message(token: str, chat_id: str, text: str,
                  parse_mode: str = "Markdown", max_retries: int = 3,
                  link: tuple | None = None) -> bool:
@@ -54,6 +79,12 @@ def send_message(token: str, chat_id: str, text: str,
     if not token or not chat_id:
         logger.warning("Telegram credentials missing — cannot send message")
         return False
+    parts = split_message(text)
+    if len(parts) > 1:
+        # Telegram rejects messages over 4096 characters; the button goes on the last part.
+        return all(send_message(token, chat_id, part, parse_mode, max_retries,
+                                link if i == len(parts) - 1 else None)
+                   for i, part in enumerate(parts))
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
     if link:

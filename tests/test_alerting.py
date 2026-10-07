@@ -127,7 +127,8 @@ class TestNewsUpdates:
                     "2026-10-05T08:15:00")
         assert nu.send_news_alerts(notify) == 1
         assert "Allianz beats estimates" in sent[0] and "board meets" not in sent[0]
-        assert "*Allianz*" in sent[0]                       # short company name, not the ticker
+        # grouped under the company with its verdict and the mix of all its new headlines
+        assert "🟢 *Allianz* (ALV.DE) — positive · avg +0.40 · 1↑ 0↓ 1→" in sent[0]
         assert nu.send_news_alerts(notify) == 0 and len(sent) == 1   # not repeated
 
     def test_quiet_hours_and_failed_sends_keep_items_for_later(self, mw, alerting, db_path, monkeypatch):
@@ -153,5 +154,53 @@ class TestNewsUpdates:
              "published_at": recent, "sentiment": 0.5},
         ], recent)
         lines = nu.news_digest_lines(pd.Timestamp.utcnow().replace(tzinfo=None) - pd.Timedelta(days=1))
-        assert lines[0].startswith("📰") and len(lines) == 3      # header, one item, blank
-        assert "[Allianz beats estimates](https://x/a)" in lines[1]
+        assert lines[0].startswith("📰")
+        assert lines[1] == "🟢 *Allianz* (ALV.DE) — positive · avg +0.65 · 2↑ 0↓ 0→"
+        assert "[Allianz beats estimates](https://x/a)" in lines[2]     # strongest first
+        assert "[Allianz gains](https://x/b)" in lines[3]
+
+    def test_digest_orders_critical_first_and_counts_neutral_only_holdings(self, mw, alerting, db_path, monkeypatch):
+        alv, nu = self._setup(mw, alerting, db_path, monkeypatch, {})
+        recent = (pd.Timestamp.utcnow().replace(tzinfo=None) - pd.Timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S")
+        others = {}
+        for sym, name in (("VNA.DE", "Vonovia SE"), ("MSFT", "Microsoft Corporation"), ("KO", "Coca-Cola Co")):
+            sid = seed_security(db_path, sym)
+            seed(db_path, "INSERT INTO securities_cache (security_id, longName) VALUES (?, ?)", (sid, name))
+            seed(db_path, "INSERT INTO transactions (portfolio_id, security_id, date, type, quantity, price) "
+                          "VALUES (1, ?, '2024-01-02', 'buy', 1, 10)", (sid,))
+            others[sym] = sid
+        def put(sid, rows):
+            mw.db.upsert_news(sid, [{"uid": f"{sid}-{i}", "title": t, "publisher": "Wire", "url": f"https://x/{sid}{i}",
+                                     "published_at": recent, "sentiment": v} for i, (t, v) in enumerate(rows)], recent)
+        put(alv, [("Allianz beats estimates", 0.8)])
+        put(others["VNA.DE"], [("Vonovia target cut", -0.6), ("Vonovia shares slide", -0.7), ("Vonovia AGM", 0.0)])
+        put(others["MSFT"], [("Microsoft rallies", 0.5), ("Microsoft probe widens", -0.5)])
+        put(others["KO"], [("Coca-Cola annual meeting", 0.0)])
+        lines = nu.news_digest_lines(pd.Timestamp.utcnow().replace(tzinfo=None) - pd.Timedelta(days=1))
+        heads = [l for l in lines if l[:1] in "🔴🟠⚪🟢"]
+        assert heads[0].startswith("🔴 *Vonovia* (VNA.DE) — critical") and "0↑ 2↓ 1→" in heads[0]
+        assert heads[1].startswith("⚪ *Microsoft* (MSFT) — mixed")
+        assert heads[2].startswith("🟢 *Allianz* (ALV.DE) — positive")
+        assert "1 more holding with neutral news only" in "\n".join(lines)
+
+
+class TestTelegramSplitting:
+    def test_long_messages_split_at_line_breaks_under_the_limit(self):
+        import telegram_client as tg
+        lines = [f"line {i} " + "x" * 50 for i in range(200)]
+        parts = tg.split_message("\n".join(lines), limit=1000)
+        assert all(len(p) <= 1000 for p in parts) and len(parts) > 1
+        assert "\n".join(parts) == "\n".join(lines)            # nothing lost or reordered
+        assert tg.split_message("short") == ["short"]
+
+    def test_button_only_on_the_last_part(self, monkeypatch):
+        import telegram_client as tg
+        sent = []
+
+        class R:
+            status_code = 200
+            text = "ok"
+        monkeypatch.setattr(tg.requests, "post", lambda url, json, timeout: sent.append(json) or R())
+        assert tg.send_message("t", "c", "\n".join(["y" * 100] * 100), link=("Open", "https://v"))
+        assert len(sent) > 1
+        assert [("reply_markup" in p) for p in sent] == [False] * (len(sent) - 1) + [True]
