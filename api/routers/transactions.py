@@ -82,9 +82,9 @@ class TransactionCreate(BaseModel):
     fees: float = 0.0
 
 class TransactionEdit(BaseModel):
-    tx_id: int
-    portfolio_id: int
-    symbol: str
+    # The id comes from the URL; portfolio/symbol are accepted but can't be changed.
+    portfolio_id: Optional[int] = None
+    symbol: Optional[str] = None
     tx_date: str
     tx_type: str
     quantity: float

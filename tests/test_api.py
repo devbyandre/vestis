@@ -140,6 +140,20 @@ class TestTransactionsAPI:
         updated = api_client.get("/transactions").json()[0]
         assert float(updated["quantity"]) == 20.0
 
+    def test_edit_transaction_with_the_payload_the_ui_sends(self, api_client, db_path):
+        # Regression: the model required tx_id in the body, which the UI never
+        # sends (the id is in the URL), so every edit failed with 422.
+        _seed_transaction(db_path, "BABA", qty=6, price=539.7, fees=10.0)
+        tx = api_client.get("/transactions").json()[0]
+        r = api_client.put(f"/transactions/{tx['id']}", json={
+            "portfolio_id": 1, "symbol": "BABA", "tx_date": "2023-06-01",
+            "tx_type": "buy", "quantity": 6, "price": 179.9, "fees": 10.0,
+        })
+        assert r.status_code == 200, r.text
+        updated = api_client.get("/transactions").json()[0]
+        assert float(updated["price"]) == pytest.approx(179.9)
+        assert float(updated["quantity"]) == 6.0
+
     def test_delete_transaction(self, api_client, db_path):
         _seed_transaction(db_path, "AAPL")
         tx_id = api_client.get("/transactions").json()[0]["id"]

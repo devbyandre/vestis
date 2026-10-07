@@ -4,6 +4,14 @@ const BASE = '/api'
 
 export const api = axios.create({ baseURL: BASE, timeout: 30000 })
 
+// Show the server's reason (FastAPI "detail") instead of "Request failed with status code 422".
+api.interceptors.response.use(r => r, err => {
+  const detail = err.response?.data?.detail
+  if (typeof detail === 'string') err.message = detail
+  else if (Array.isArray(detail)) err.message = detail.map(d => `${(d.loc || []).slice(1).join('.') || 'request'}: ${d.msg}`).join('; ')
+  return Promise.reject(err)
+})
+
 // ── Generic helpers ──────────────────────────────────────────────────────────
 
 const get = (url, params) => api.get(url, { params }).then(r => r.data)

@@ -283,10 +283,10 @@ export default function TabTransactions() {
     { key: 'tx_cost', label: 'Fees', align: 'right', render: (v, r) => r.tx_type === 'split' || !v ? '—' : fmt.currency(v, 2) },
     { key: 'total_cost', label: 'Total', align: 'right', render: (v, r) => r.tx_type === 'split' || !v ? '—' : fmt.currency(v, 2) },
     { key: '_edit', label: '', render: (_, r) => (
-      <button className="text-gray-600 hover:text-accent transition-colors" onClick={() => setEditTx(r)}><Pencil size={12} /></button>
+      <button className="text-gray-600 hover:text-accent transition-colors" aria-label="Edit transaction" title="Edit" onClick={() => setEditTx(r)}><Pencil size={12} /></button>
     ) },
     { key: '_del', label: '', render: (_, r) => (
-      <button className="text-gray-600 hover:text-danger transition-colors" onClick={() => setDeleteTx(r)}><Trash2 size={12} /></button>
+      <button className="text-gray-600 hover:text-danger transition-colors" aria-label="Delete transaction" title="Delete" onClick={() => setDeleteTx(r)}><Trash2 size={12} /></button>
     ) },
   ]
 
@@ -401,7 +401,7 @@ export default function TabTransactions() {
       </Modal>
       {editTx && (
         <Modal open={!!editTx} onClose={() => setEditTx(null)} title={`Edit Transaction #${editTx.id}`}>
-          <TxForm initial={{ portfolio_id: editTx.portfolio_id, symbol: editTx.symbol || editTx.yahoo_ticker, tx_date: (editTx.tx_date || editTx.date)?.slice(0, 10), tx_type: editTx.tx_type, quantity: editTx.quantity, price: editTx.price, fees: editTx.tx_cost || 0 }}
+          <TxForm initial={{ portfolio_id: editTx.portfolio_id, symbol: editTx.symbol || editTx.yahoo_ticker, tx_date: (editTx.tx_date || editTx.date)?.slice(0, 10), tx_type: editTx.tx_type || editTx.type, quantity: editTx.quantity, price: editTx.price, fees: editTx.tx_cost ?? editTx.fees ?? 0 }}
             portfolios={portfolios} securities={securities}
             onSubmit={(f) => editMut.mutate({ id: editTx.id, form: f })} onClose={() => setEditTx(null)} />
         </Modal>
