@@ -530,6 +530,15 @@ class TestSettingsAPI:
         body = api_client.get("/settings").json()
         assert body["tax_rate"] == 0.30
 
+    def test_update_settings_leaves_worker_state_alone(self, api_client):
+        import config_utils
+        config_utils.set_config("news_alerts_sent_until", "2026-10-05T10:00:00")
+        r = api_client.put("/settings", json={"settings": {"news_alerts_sent_until": "2026-01-01T00:00:00",
+                                                           "last_digest_sent_daily": "2026-01-01", "tax_rate": 0.2}})
+        assert r.status_code == 200
+        assert config_utils.get_config("news_alerts_sent_until") == "2026-10-05T10:00:00"
+        assert config_utils.get_config("last_digest_sent_daily") in (None, "")
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Health

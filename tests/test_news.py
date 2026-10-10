@@ -30,7 +30,7 @@ def offline_sources(monkeypatch):
     """No network in tests: external feeds return nothing unless a test says otherwise."""
     import news_sources
     monkeypatch.setattr(news_sources, "market_feeds", lambda feeds=None: [])
-    monkeypatch.setattr(news_sources, "google_news", lambda name, days=7, count=10: [])
+    monkeypatch.setattr(news_sources, "google_news", lambda name, days=7, count=10, symbol=None: [])
     monkeypatch.setattr(news_sources, "page_abstract", lambda url, title="": None)
     return news_sources
 
@@ -304,6 +304,57 @@ class TestSources:
         assert news_sources.match_targets("Why $MSFT could rally", targets) == [2]
         assert news_sources.match_targets("Knock-on effects for KO fans", targets) == []   # 2-letter ticker ignored
         assert news_sources.match_targets("Allianzen und Partner", targets) == []
+
+    @pytest.mark.parametrize("title, summary, hit", [
+        ("Visa shares rise after earnings", None, True),
+        ("Visa to Announce Fiscal Fourth Quarter Results", None, True),
+        ("Visa (NYSE:V) Sets New 1-Year High", "Holders of student visas ...", True),     # ticker cited
+        ("Trump Visa Policies Drive Drop In Columbia Journalism Applications", None, False),
+        ("New Zealand's wealthy visa investors build a cable car", None, False),          # lowercase
+        ("Queenstown Cable Car Attracts New Zealand Golden Visa Investors", None, False),
+        ("Visa stock slips", "The H-1B suspension hits Indian IT firms", False),        # abstract gives it away
+    ])
+    def test_ambiguous_names_need_the_company_meaning(self, title, summary, hit):
+        import news_sources
+        assert news_sources.mentions_company("Visa", "V", title, summary) is hit
+
+    @pytest.mark.parametrize("title, hit", [
+        ("Target stock falls after weak holiday outlook", True),
+        ("Target's Circle Week falls short", True),
+        ("How Investors May Respond To Target (TGT) Home Brand Relaunch", True),
+        ("Citi Raises AMD Price Target to $800", False),
+        ("Guggenheim Cut Its DraftKings Target. It Still Sees 51% Upside", False),
+        ("Bitcoin Tumbles but $205,000 Remains the Target, Analyst Says", False),
+    ])
+    def test_strict_names_need_the_company_spelled_out(self, title, hit):
+        import news_sources
+        assert news_sources.mentions_company("Target", "TGT", title) is hit
+
+    def test_plain_names_only_need_a_capitalised_mention(self):
+        import news_sources
+        assert news_sources.mentions_company("Apple", "AAPL", "Morgan Stanley Is Bullish on Apple")
+        assert not news_sources.mentions_company("Apple", "AAPL", "Free apple cider taste off at farmers market")
+        assert news_sources.match_targets("New visa rules worry Visa holders' employers",
+                                          [{"security_id": 1, "symbol": "V", "clean_name": "Visa"}]) == []
+
+
+class TestMaterialEvents:
+    @pytest.mark.parametrize("title, key", [
+        ("Allianz issues profit warning", "profit_warning"),
+        ("Novo Nordisk lowers full-year outlook", "guidance_cut"),
+        ("Visa misses Wall Street estimates", "earnings_miss"),
+        ("SAP tops analyst profit expectations", "earnings_beat"),
+        ("Visa CEO to step down", "ceo_exit"),
+        ("Goldman upgrades Palantir to buy", "upgrade"),
+        ("Is a takeover coming for Visa?", None),          # speculation
+        ("Allianz denies merger talks", None),
+        ("Apple shares fall after order cut report", None),  # moves are price alerts' job
+        ("Apple Inc. $AAPL Shares Acquired by Kintra Wealth LLC", None),   # fund holdings report
+    ])
+    def test_events(self, title, key):
+        from sentiment import material_event
+        ev = material_event(title)
+        assert (ev or {}).get("key") == key
 
 
 class TestMarketNews:

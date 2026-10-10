@@ -73,14 +73,19 @@ export default function TabSettings() {
         <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-300">
           <input type="checkbox" checked={!!form.news_alerts} onChange={e => set('news_alerts')(e.target.checked)}
             className="rounded border-surface-3 bg-surface-2" />
-          Send strongly worded headlines about my holdings to Telegram as they arrive
+          Send urgent news about my holdings to Telegram as it arrives
         </label>
         {form.news_alerts && (
-          <Field label="Minimum headline strength (0–1)" type="number" value={form.news_alert_threshold ?? 0.5}
-            onChange={set('news_alert_threshold')}
-            hint="Sentiment is a rough headline score; 0.5 sends only clearly positive or negative news. Quiet hours apply." />
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Max urgent messages per day" type="number" value={form.news_alert_daily_max ?? 3}
+              onChange={set('news_alert_daily_max')}
+              hint="Profit warnings, takeovers, fraud, insolvency and trading halts are always sent." />
+            <Field label="Negative headline strength (0–1)" type="number" value={form.news_alert_threshold ?? 0.5}
+              onChange={set('news_alert_threshold')}
+              hint="A holding also counts as urgent when 3 sources carry headlines at least this negative within 6 h." />
+          </div>
         )}
-        <p className="text-xs text-gray-600">The daily digest always groups news by holding: an overall verdict (critical, negative, mixed, positive), the mix of positive/negative/neutral headlines and the strongest ones, worst first.</p>
+        <p className="text-xs text-gray-600">Urgent means a reported event (profit warning, guidance change, earnings beat or miss, takeover, fraud, insolvency, trading halt, dividend cut, management exit) or broad negative coverage. Each holding is sent at most once a day per reason, everything arriving in one run comes as one message, and quiet hours apply. All other news goes into the daily digest, grouped by holding with a verdict (critical, negative, mixed, positive), the mix of positive/negative/neutral headlines and the strongest ones.</p>
       </Section>
 
       <Section title="Telegram">

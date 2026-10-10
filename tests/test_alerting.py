@@ -1,4 +1,5 @@
 """alerting package: digest wiring and the telegram_worker entry point."""
+import json
 import sys
 
 import pandas as pd
@@ -105,8 +106,8 @@ class TestNewsUpdates:
         monkeypatch.setattr(nu, "quiet_hours_active", lambda: False)
         return held, nu
 
-    def _store(self, mw, held, rows, fetched_at):
-        mw.db.upsert_news(held, [{"uid": u, "title": t, "publisher": "Wire", "url": f"https://x/{u}",
+    def _store(self, mw, held, rows, fetched_at, publisher="Wire"):
+        mw.db.upsert_news(held, [{"uid": u, "title": t, "publisher": publisher, "url": f"https://x/{u}",
                                   "published_at": "2026-10-05T08:00:00", "sentiment": s} for u, t, s in rows],
                           fetched_at)
 
@@ -115,7 +116,7 @@ class TestNewsUpdates:
         held, nu = self._setup(mw, alerting, db_path, monkeypatch, cfg)
         assert nu.send_news_alerts(lambda t, l=None: sent.append(t) or True) == 0 and not sent
 
-    def test_sends_only_new_strong_headlines_once(self, mw, alerting, db_path, monkeypatch):
+    def test_sends_urgent_events_once_and_not_merely_strong_words(self, mw, alerting, db_path, monkeypatch):
         cfg, sent = {"news_alerts": True}, []
         held, nu = self._setup(mw, alerting, db_path, monkeypatch, cfg)
         notify = lambda t, l=None: sent.append(t) or True
@@ -123,26 +124,68 @@ class TestNewsUpdates:
         nu.send_news_alerts(notify, now=pd.Timestamp("2026-10-05T07:30:00"))    # first run: no backlog
         assert not sent and cfg["news_alerts_sent_until"] == "2026-10-05T07:30:00"
 
-        self._store(mw, held, [("a", "Allianz beats estimates", 0.8), ("b", "Allianz board meets", 0.0)],
-                    "2026-10-05T08:15:00")
-        assert nu.send_news_alerts(notify) == 1
-        assert "Allianz beats estimates" in sent[0] and "board meets" not in sent[0]
-        # grouped under the company with its verdict and the mix of all its new headlines
-        assert "🟢 *Allianz* (ALV.DE) — positive · avg +0.40 · 1↑ 0↓ 1→" in sent[0]
-        assert nu.send_news_alerts(notify) == 0 and len(sent) == 1   # not repeated
+        self._store(mw, held, [("a", "Allianz beats estimates", 0.8), ("b", "Allianz shares jump in rally", 0.8),
+                               ("c", "Allianz board meets", 0.0)], "2026-10-05T08:15:00")
+        assert nu.send_news_alerts(notify, now=pd.Timestamp("2026-10-05T08:20:00")) == 1
+        assert "🟢 *Allianz* (ALV.DE) — earnings beat" in sent[0]
+        assert "Allianz beats estimates" in sent[0] and "jump" not in sent[0] and "board meets" not in sent[0]
+        assert "waits for the daily digest" in sent[0]
+        assert nu.send_news_alerts(notify, now=pd.Timestamp("2026-10-05T08:25:00")) == 0 and len(sent) == 1
+
+        # the same event reported again later the same day is not sent again
+        self._store(mw, held, [("d", "Allianz tops analyst profit expectations", 0.6)], "2026-10-05T10:15:00")
+        assert nu.send_news_alerts(notify, now=pd.Timestamp("2026-10-05T10:20:00")) == 0 and len(sent) == 1
+        assert cfg["news_alerts_sent_until"] == "2026-10-05T10:15:00"
+
+    def test_strongly_worded_headline_alone_waits_for_the_digest(self, mw, alerting, db_path, monkeypatch):
+        cfg, sent = {"news_alerts": True, "news_alerts_sent_until": "2026-10-05T00:00:00"}, []
+        held, nu = self._setup(mw, alerting, db_path, monkeypatch, cfg)
+        self._store(mw, held, [("a", "Allianz shares plunge", -0.8), ("b", "Allianz, BASF, Siemens miss estimates", -0.6),
+                               ("c", "Is a takeover coming for Allianz?", 0.0),
+                               ("d", "Allianz partner Munich Re misses estimates", -0.5),
+                               ("e", "Fed cuts outlook for growth", -0.5)], "2026-10-05T08:15:00")
+        assert nu.send_news_alerts(lambda t, l=None: sent.append(t) or True,
+                                   now=pd.Timestamp("2026-10-05T08:20:00")) == 0
+        assert not sent and cfg["news_alerts_sent_until"] == "2026-10-05T08:15:00"
+
+    def test_negative_coverage_from_three_sources_is_urgent(self, mw, alerting, db_path, monkeypatch):
+        cfg, sent = {"news_alerts": True, "news_alerts_sent_until": "2026-10-05T00:00:00"}, []
+        held, nu = self._setup(mw, alerting, db_path, monkeypatch, cfg)
+        notify = lambda t, l=None: sent.append(t) or True
+        now = pd.Timestamp("2026-10-05T09:00:00")
+        self._store(mw, held, [("a", "Allianz shares slide on weak demand", -0.6)], "2026-10-05T08:15:00", "Reuters")
+        self._store(mw, held, [("b", "Allianz stock falls", -0.5)], "2026-10-05T08:15:00", "Reuters")
+        self._store(mw, held, [("c", "Allianz tumbles", -0.7)], "2026-10-05T08:15:00", "Bloomberg")
+        assert nu.send_news_alerts(notify, now=now) == 0                       # two sources only
+        self._store(mw, held, [("d", "Allianz drops as losses mount", -0.8)], "2026-10-05T08:45:00", "FT")
+        assert nu.send_news_alerts(notify, now=now) == 2
+        assert "🔴 *Allianz* (ALV.DE) — negative coverage from 3 sources" in sent[0]
+
+    def test_daily_maximum_holds_back_all_but_critical_events(self, mw, alerting, db_path, monkeypatch):
+        now = pd.Timestamp("2026-10-05T09:00:00")
+        earlier = [(now - pd.Timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%S") for h in (1, 2, 3)]
+        cfg, sent = {"news_alerts": True, "news_alerts_sent_until": "2026-10-05T00:00:00",
+                     "news_alert_state": json.dumps({"sent": earlier, "cooldown": {}})}, []
+        held, nu = self._setup(mw, alerting, db_path, monkeypatch, cfg)
+        notify = lambda t, l=None: sent.append(t) or True
+        self._store(mw, held, [("a", "Allianz beats estimates", 0.8)], "2026-10-05T08:15:00")
+        assert nu.send_news_alerts(notify, now=now) == 0 and not sent
+        self._store(mw, held, [("b", "Allianz issues profit warning", -0.6)], "2026-10-05T08:30:00")
+        assert nu.send_news_alerts(notify, now=now) == 1 and "profit warning" in sent[0]
 
     def test_quiet_hours_and_failed_sends_keep_items_for_later(self, mw, alerting, db_path, monkeypatch):
         cfg = {"news_alerts": True, "news_alerts_sent_until": "2026-10-05T00:00:00"}
         held, nu = self._setup(mw, alerting, db_path, monkeypatch, cfg)
-        self._store(mw, held, [("a", "Allianz shares plunge", -0.8)], "2026-10-05T08:15:00")
+        now = pd.Timestamp("2026-10-05T09:00:00")
+        self._store(mw, held, [("a", "Allianz cuts full-year outlook", -0.5)], "2026-10-05T08:15:00")
         monkeypatch.setattr(nu, "quiet_hours_active", lambda: True)
-        assert nu.send_news_alerts(lambda t, l=None: True) == 0
+        assert nu.send_news_alerts(lambda t, l=None: True, now=now) == 0
         monkeypatch.setattr(nu, "quiet_hours_active", lambda: False)
-        assert nu.send_news_alerts(lambda t, l=None: False) == 0                 # send failed
+        assert nu.send_news_alerts(lambda t, l=None: False, now=now) == 0                 # send failed
         assert cfg["news_alerts_sent_until"] == "2026-10-05T00:00:00"
         sent = []
-        assert nu.send_news_alerts(lambda t, l=None: sent.append(t) or True) == 1
-        assert "📉" in sent[0]
+        assert nu.send_news_alerts(lambda t, l=None: sent.append(t) or True, now=now) == 1
+        assert "📉" in sent[0] and "guidance cut" in sent[0]
 
     def test_digest_lists_strongest_headline_per_holding(self, mw, alerting, db_path, monkeypatch):
         held, nu = self._setup(mw, alerting, db_path, monkeypatch, {})

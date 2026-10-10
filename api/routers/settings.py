@@ -17,6 +17,12 @@ def get_settings():
     safe["telegram_chat_id_set"] = bool(cfg.get("telegram_chat_id"))
     return safe
 
+# Written by the workers, not by people; the Settings page sends back what it
+# loaded, which would roll these back to a stale value.
+_RUNTIME_KEYS = ("news_alert_state", "news_alerts_sent_until", "last_held_flush", "prices_unadjusted")
+_RUNTIME_PREFIXES = ("last_digest_sent_",)
+
+
 class SettingsUpdate(BaseModel):
     settings: dict
 
@@ -29,6 +35,8 @@ def update_settings(body: SettingsUpdate):
     if "timezone" in s and not is_valid_tz(s["timezone"]):
         raise HTTPException(422, f"Unknown timezone '{s['timezone']}'")
     for key, value in body.settings.items():
+        if key in _RUNTIME_KEYS or key.startswith(_RUNTIME_PREFIXES):
+            continue
         set_config(key, value)
     return {"ok": True}
 

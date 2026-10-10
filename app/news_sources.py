@@ -156,28 +156,127 @@ def _name_pattern(name: str) -> re.Pattern:
     return re.compile(r"(?<![\w-])" + re.escape(key) + r"(?![\w-])", re.I)
 
 
+# Company names that are also everyday words, with the phrases that give the
+# other meaning away ("Trump Visa Policies ...", "golden visa").
+AMBIGUOUS_NAMES = {
+    "visa": r"(?:h-?1b|student|tourist|work|golden|travel|entry|transit|investor|e-?|digital nomad) visas?|"
+            r"visas? (?:polic\w*|rules?|fees?|programs?|holders?|applica\w*|requirements?|restrictions?|bans?|"
+            r"suspensions?|curbs?|approvals?|interviews?|appointments?|waivers?|overstay\w*|sponsorship|anxiety)|worker visas?|"
+            r"visa-free|h-?1b|immigra\w*|passports?|citizenship|asylum|consulates?|embass(?:y|ies)|green cards?|"
+            r"deport\w*|applicants?",
+    "apple": r"apple (?:orchards?|cider|juice|pie|growers?|harvest)|big apple",
+    "shell": r"shell compan\w+|shell ?shock\w*|shelling|eggshells?|artillery",
+    "target": r"(?:to|could|will|would|may|might|must|aims? to) target|targets? (?:of|for)|on target|targeted|"
+              r"targeting|inflation target|target (?:revenue|rights|date)",
+    "meta": r"meta[- ]analys\w+|metadata",
+    "block": r"block(?:s|ed|ing)\b|roadblock|voting bloc|trading block",
+    "oracle": r"oracle of omaha",
+    "alphabet": r"alphabet soup",
+    "amazon": r"rainforest|amazon river|amazonia|deforest\w*",
+    "snap": r"snap (?:election|poll|benefits)",
+    "gap": r"(?:wage|pay|gender|funding|budget|trade|output|valuation) gap|gaps? (?:up|down|between)",
+    "delta": r"delta variant|river delta|delta hedg\w*",
+    "next": r"next (?:week|month|year|quarter|day|generation|step|move)",
+    "wise": r"wise (?:move|choice|investment)|penny[- ]wise|likewise",
+    "orange": r"orange juice|agent orange",
+    "booking": r"booking (?:a |your )|bookings? (?:for|of)",
+    "match": r"match(?:es|ed|ing)? (?:day|fixture)|football|soccer",
+    "zoom": r"zoom(?:s|ed|ing) (?:in|out)",
+    "unity": r"national unity|unity government",
+    "carnival": r"carnival (?:season|parade)|rio carnival",
+    "continental": r"continental (?:europe|breakfast|shelf|divide|drift)",
+    "discover": r"discover(?:s|ed|ing)? (?:that|how|why)",
+    "progressive": r"progressive (?:party|politic\w*|left|tax)",
+    "southern": r"southern (?:europe|california|hemisphere|border|states)",
+    "travelers": r"airlines?|airports?|holidays?|vacations?",
+    "avalanche": r"snow|ski|mountains?",
+    "stellar": r"stellar (?:results|performance|year|quarter|growth)|interstellar",
+}
+
+# Words in a headline that show a company is meant.
+_COMPANY_WORDS = {
+    "stock", "stocks", "share", "shares", "shareholders", "inc", "corp", "plc", "ag", "se", "nv",
+    "ceo", "cfo", "earnings", "revenue", "revenues", "results", "quarter", "quarterly", "profit", "profits",
+    "sales", "guidance", "outlook", "dividend", "dividends", "buyback", "analyst", "analysts", "investors",
+    "valuation", "q1", "q2", "q3", "q4", "fiscal", "upgrade", "upgrades", "upgraded", "downgrade", "downgrades",
+    "downgraded", "ipo", "acquires", "acquisition", "corporation", "stores", "group", "holdings",
+}
+_TOKENS = re.compile(r"[A-Za-z0-9]+")
+
+
+def _ticker_pattern(symbol: str) -> Optional[re.Pattern]:
+    """'(V)', '(NYSE: V)', 'NYSE:V', '$V' — the bare ticker as a citation, not as a word."""
+    base = re.sub(r"[.\-].*$", "", str(symbol or "")).upper()
+    if not re.fullmatch(r"[A-Z0-9]{1,6}", base):
+        return None
+    t = re.escape(base)
+    return re.compile(rf"\((?:[A-Za-z]+:\s?)?{t}\)|\b(?:NYSE|NASDAQ|Nasdaq|XETRA|ETR|LSE|FRA|TSX|AMS|EPA)\s?:\s?{t}\b|"
+                      rf"(?<![\w$])\${t}\b")
+
+
+# Names that are everyday finance words ("price target", "block trade", "gap
+# up"): only a ticker citation, a possessive or a company word right after the
+# name ("Target stock", "Target Corp") count.
+STRICT_NAMES = {"target", "block", "gap", "next", "wise"}
+
+
+def _strict_hit(text: str, end: int) -> bool:
+    if re.match(r"['’]s\b", text[end:end + 3]):
+        return True
+    after = re.match(r"\s+([A-Za-z0-9]+)", text[end:])     # same clause: "Target stock", not "Target, Analyst"
+    return bool(after) and after.group(1).lower() in _COMPANY_WORDS
+
+
+def mentions_company(name: Optional[str], symbol: Optional[str], title: str,
+                     summary: Optional[str] = None) -> bool:
+    """Is this headline about the company `name` (a clean_name)?
+
+    The name must appear in the title capitalised as a proper noun ("visa
+    rules" is not Visa Inc.); "price target" never counts as Target. Names that
+    are everyday words (AMBIGUOUS_NAMES) are rejected when title or abstract
+    use the word's other meaning, unless they cite the ticker; STRICT_NAMES
+    need the company spelled out.
+    """
+    if not name or not title:
+        return False
+    hits = [m for m in _name_pattern(name).finditer(title)
+            if not (m.group(0)[0].islower() and name[0].isupper())]
+    if not hits:
+        return False
+    other = AMBIGUOUS_NAMES.get(name.lower())
+    if other is None:
+        return True
+    ticker = _ticker_pattern(symbol)
+    full = f"{title} {summary or ''}"
+    if ticker and ticker.search(full):
+        return True
+    if re.search(rf"\b(?:{other})\b", full, re.I):
+        return False
+    return name.lower() not in STRICT_NAMES or any(_strict_hit(title, m.end()) for m in hits)
+
+
 _FINANCE_TERMS = " OR ".join(["stock", "shares", "earnings", "investors", "analyst", "market", "revenue", "profit"])
 # Quote/profile pages that search engines index like articles.
 _QUOTE_PAGE = re.compile(r"stock (price|quote)|price,? news|quote (and|&) history|share price (today|live)", re.I)
 
 
-def google_news(name: str, days: int = 7, count: int = 10) -> List[dict]:
+def google_news(name: str, days: int = 7, count: int = 10, symbol: Optional[str] = None) -> List[dict]:
     """Recent headlines that name the company (search by cleaned company name)."""
     q = quote_plus(f'"{name}" ({_FINANCE_TERMS}) when:{max(1, days)}d')
     items = parse_rss(fetch(GOOGLE_NEWS.format(q=q)))
-    pattern = _name_pattern(name)
-    kept = [i for i in items if pattern.search(i["title"]) and not _QUOTE_PAGE.search(i["title"])]
+    kept = [i for i in items if not _QUOTE_PAGE.search(i["title"])
+            and mentions_company(name, symbol, i["title"], i.get("summary"))]
     kept.sort(key=lambda i: i["published_at"], reverse=True)
     return kept[:count]
 
 
-def match_targets(title: str, targets: Iterable[dict]) -> List[int]:
+def match_targets(title: str, targets: Iterable[dict], summary: Optional[str] = None) -> List[int]:
     """Security ids whose company name (or US-style ticker) appears in a headline."""
     hits = []
     for t in targets:
         name = t.get("clean_name")
         sym = str(t.get("symbol") or "")
-        if name and _name_pattern(name).search(title):
+        if name and mentions_company(name, sym, title, summary):
             hits.append(int(t["security_id"]))
         elif re.fullmatch(r"[A-Z]{3,5}", sym) and re.search(rf"(?<![\w$])\$?{sym}(?![\w])", title):
             hits.append(int(t["security_id"]))

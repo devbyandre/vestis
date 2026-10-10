@@ -103,7 +103,7 @@ def fetch_headlines(symbol: str, name: Optional[str], security_type: Optional[st
     company = news_sources.clean_name(name)
     if company and not _google_blocked:
         try:
-            google = news_sources.google_news(company, days=7, count=FETCH_COUNT)
+            google = news_sources.google_news(company, days=7, count=FETCH_COUNT, symbol=symbol)
             if google:
                 found.append("name")
                 items += google
@@ -139,7 +139,7 @@ def refresh_market_news(targets: pd.DataFrame, stamp: str) -> dict:
     attached = 0
     by_security: dict = {}
     for it in items:
-        for sid in news_sources.match_targets(it["title"], named):
+        for sid in news_sources.match_targets(it["title"], named, it.get("summary")):
             by_security.setdefault(sid, []).append(it)
     for sid, rows in by_security.items():
         attached += db.upsert_news(sid, rows, stamp)

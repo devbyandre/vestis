@@ -141,3 +141,61 @@ def label_for(score: float) -> str:
     if score <= -POSITIVE_THRESHOLD:
         return "negative"
     return "neutral"
+
+
+# ── Material events ────────────────────────────────────────────────────────
+# Corporate events that move a stock, recognised in a headline. Sentiment words
+# alone ("drop", "bubble") say little; these say something happened.
+# key: (pattern, direction, label, urgent). Urgent events may go out instantly;
+# the rest only show up in the digest.
+_EVENTS = {
+    "profit_warning": (r"profit warning|warns? (?:on|of) (?:lower |weak\w* )?(?:profits?|earnings|sales|revenue)",
+                       -1, "profit warning", True),
+    "guidance_cut":   (r"(?:cuts?|lowers?|slash(?:es)?|trims?|withdraws?|pulls?|suspends?|reduces?) "
+                       r"(?:its |the |full[- ]year |annual |fy |\d{4} )*(?:guidance|outlook|forecasts?)|"
+                       r"(?:guidance|outlook|forecast) (?:cut|lowered|slashed|withdrawn)", -1, "guidance cut", True),
+    "guidance_raise": (r"(?:raises?|lifts?|boosts?|hikes?|ups) (?:its |the |full[- ]year |annual |fy |\d{4} )*"
+                       r"(?:guidance|outlook|forecasts?)|(?:guidance|outlook|forecast) (?:raised|lifted)",
+                       1, "guidance raised", True),
+    "earnings_miss":  (r"miss(?:es|ed)? (?:[\w-]+ ){0,2}(?:estimates|expectations|forecasts|consensus)|"
+                       r"(?:earnings|results|profit|revenue|sales) (?:fall|fell|falls) short", -1, "earnings miss", True),
+    "earnings_beat":  (r"(?:beats?|tops?|topped|exceeds?|exceeded|surpass(?:es|ed)?) (?:[\w-]+ ){0,2}"
+                       r"(?:estimates|expectations|forecasts|consensus)", 1, "earnings beat", True),
+    "takeover":       (r"takeover|buyout|tender offer|to be acquired|acquired by|(?:bid|offer) for|merger talks|"
+                       r"agrees? to (?:be )?(?:bought|sold)", 1, "takeover", True),
+    "fraud":          (r"fraud|accounting (?:irregularit\w+|scandal|probe)|short[- ]seller|short report|"
+                       r"restat(?:e|es|ed|ement) (?:\w+ )?(?:results|earnings|accounts)", -1, "fraud allegation", True),
+    "insolvency":     (r"bankrupt\w*|insolven\w*|chapter 11|creditor protection|default(?:s|ed)? on (?:its )?(?:debt|bonds?|loans?)",
+                       -1, "insolvency", True),
+    "halt":           (r"trading (?:halt|suspen)\w*|halts? trading|delist\w*", -1, "trading halt", True),
+    "dividend_cut":   (r"(?:cuts?|slash(?:es)?|suspends?|scraps?|omits?|halts?|eliminates?) (?:its |the )?dividend|"
+                       r"dividend (?:cut|suspen\w+|scrapped)", -1, "dividend cut", True),
+    "ceo_exit":       (r"\b(?:ceo|cfo|chief executive|chair(?:man|woman)?)\b.{0,40}\b(?:resign\w*|steps? down|quits?|"
+                       r"ousted|fired|departs?|to leave|exits?)\b|\b(?:resign\w*|ousts?|fires?)\b.{0,20}\b(?:ceo|cfo|chief executive)\b",
+                       -1, "management exit", True),
+    "downgrade":      (r"downgrade[sd]?\b|cut to (?:sell|underperform|underweight|neutral|hold|equal[- ]weight)",
+                       -1, "downgrade", False),
+    "upgrade":        (r"upgrade[sd]?\b|raised to (?:buy|outperform|overweight)", 1, "upgrade", False),
+    "legal":          (r"lawsuit|class action|\bsued\b|\bsues\b|indict\w*|antitrust|probe|investigation|subpoena",
+                       -1, "legal / probe", False),
+    "recall":         (r"\brecall(?:s|ed|ing)?\b", -1, "recall", False),
+    "layoffs":        (r"layoffs?|job cuts|cut(?:s|ting)? [\d,]+ jobs", -1, "layoffs", False),
+    "breach":         (r"data breach|cyber ?attack|ransomware|hacked", -1, "cyber incident", False),
+}
+_EVENT_RE = [(key, re.compile(p, re.I), d, label, urgent) for key, (p, d, label, urgent) in _EVENTS.items()]
+# Speculation, denials and fund holdings reports ("Shares Acquired by X Wealth
+# LLC") are not events.
+_NOT_EVENT = re.compile(r"\b(?:denies|denied|rules? out|no plans|rumou?rs?|could|might|would|should you|what if|"
+                        r"if|whether)\b|\b(?:shares|stake|position|holdings?) (?:acquired|bought|sold|purchased|"
+                        r"raised|lowered|trimmed|boosted|cut|increased|decreased)\b|\b(?:llc|13f)\b", re.I)
+
+
+def material_event(title: str) -> Optional[dict]:
+    """The first material event a headline reports, as
+    {"key", "label", "direction" (+1/-1), "urgent"}, or None."""
+    if not title or title.rstrip().endswith("?") or _NOT_EVENT.search(title):
+        return None
+    for key, rx, direction, label, urgent in _EVENT_RE:
+        if rx.search(title):
+            return {"key": key, "label": label, "direction": direction, "urgent": urgent}
+    return None

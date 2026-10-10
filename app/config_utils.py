@@ -40,6 +40,7 @@ DEFAULT = {
     "news_min_fetch_minutes": 30,
     "news_alerts": False,
     "news_alert_threshold": 0.5,
+    "news_alert_daily_max": 3,
     "price_refresh_minutes": 60,
     "price_refresh_hour_utc": 22,
     "dcf_projection_years": 10,
