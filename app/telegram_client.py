@@ -118,6 +118,16 @@ def notify_error(source: str, error: Exception = None, message: str = None,
     error:   optional exception object — its traceback will be included (truncated)
     message: optional custom message instead of / in addition to the exception
     """
+    if error is not None:
+        try:
+            from db_utils.core import db_outage_recovered
+            if db_outage_recovered(error):
+                logger.warning("%s lost the database connection, but it is back "
+                               "(restart/deploy?) — not alerting: %s", source, error)
+                return False
+        except ImportError:
+            pass
+
     token, chat = get_creds(cli_token, cli_chat)
     if not token or not chat:
         logger.warning("Cannot send error notification — Telegram not configured")

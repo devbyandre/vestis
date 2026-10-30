@@ -97,6 +97,63 @@ def _raw_conn():
     return _engine.raw_connection()
 
 
+# ── Database availability (deploys restart Postgres) ─────────────────────────
+
+# Messages that mean the server is unreachable — not a bad query. Matching on
+# the message because SQLite raises the same OperationalError type for
+# "no such table" and friends.
+_CONNECTION_ERROR_MARKERS = (
+    "the database system is shutting down",
+    "the database system is starting up",
+    "the database system is in recovery mode",
+    "terminating connection due to administrator command",
+    "server closed the connection unexpectedly",
+    "could not connect to server",
+    "connection refused",
+    "could not translate host name",
+    "connection timed out",
+    "ssl connection has been closed unexpectedly",
+)
+
+
+def is_connection_error(exc: BaseException) -> bool:
+    """True if exc (or anything it was raised from) is a lost/refused DB connection."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if getattr(exc, "connection_invalidated", False):
+            return True
+        msg = str(exc).lower()
+        if any(m in msg for m in _CONNECTION_ERROR_MARKERS):
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
+def wait_for_db(timeout: float = 90, interval: float = 5) -> bool:
+    """Poll until the database answers (True) or timeout seconds pass (False)."""
+    import time
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            with _engine.connect() as con:
+                con.execute(sa_text("SELECT 1"))
+            return True
+        except Exception as exc:
+            if time.monotonic() >= deadline:
+                logging.error("Database still unreachable after %ss: %s", timeout, exc)
+                return False
+            logging.warning("Database unreachable, retrying in %ss: %s", interval, str(exc).splitlines()[0])
+            time.sleep(interval)
+
+
+def db_outage_recovered(exc: BaseException, timeout: float = 90) -> bool:
+    """True if exc was a lost DB connection and the database is back within timeout
+    — e.g. Postgres restarting during a deploy. Not worth an alert; the next
+    scheduled run picks up where this one stopped."""
+    return is_connection_error(exc) and wait_for_db(timeout)
+
+
 # ── SQL dialect helper ────────────────────────────────────────────────────────
 
 def _ph() -> str:

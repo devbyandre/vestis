@@ -7,6 +7,7 @@ deliver them over Telegram, optionally send a digest. The logic lives in the
 import argparse
 import logging
 
+import db_utils as db
 import telegram_client as tg
 from alerting.digest import send_digest
 from alerting.engine import run_immediate
@@ -43,6 +44,8 @@ def main():
         test_telegram(args.token, args.chat)
         return
     try:
+        # A run that starts while Postgres restarts (deploys) waits instead of crashing
+        db.wait_for_db()
         maintain_alerts()
         notify = make_notifier(args.token, args.chat)
         if notify:

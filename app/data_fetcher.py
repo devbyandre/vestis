@@ -669,6 +669,8 @@ if __name__ == "__main__":
 
     tickers = [t.strip() for t in args.tickers.split(",") if t.strip()] if args.tickers else []
     try:
+        # A run that starts while Postgres restarts (deploys) waits instead of crashing
+        db.wait_for_db()
         run_fetch(tickers, force=args.force)
     except Exception as e:
         logging.exception("Data fetcher crashed")

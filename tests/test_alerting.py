@@ -247,3 +247,69 @@ class TestTelegramSplitting:
         assert tg.send_message("t", "c", "\n".join(["y" * 100] * 100), link=("Open", "https://v"))
         assert len(sent) > 1
         assert [("reply_markup" in p) for p in sent] == [False] * (len(sent) - 1) + [True]
+
+
+class TestDatabaseRestarts:
+    """Deploys restart Postgres; a scheduled run caught in that window must not
+    page the user, but a real outage must."""
+
+    def _shutting_down(self):
+        from sqlalchemy.exc import OperationalError
+        return OperationalError("SELECT 1", {}, Exception(
+            'connection to server at "db" (10.0.48.2), port 5432 failed: '
+            "FATAL:  the database system is shutting down"))
+
+    def test_connection_errors_are_recognised(self, db):
+        import sqlite3
+        from sqlalchemy.exc import OperationalError
+        assert db.is_connection_error(self._shutting_down())
+        try:
+            try:
+                raise ConnectionRefusedError("Connection refused")
+            except ConnectionRefusedError as inner:
+                raise RuntimeError("fetch failed") from inner
+        except RuntimeError as wrapped:
+            assert db.is_connection_error(wrapped)          # found via the cause chain
+        # Same exception type, but a broken query — not an outage
+        assert not db.is_connection_error(OperationalError("x", {}, sqlite3.OperationalError("no such table: prices")))
+        assert not db.is_connection_error(ValueError("bad value"))
+
+    def test_wait_for_db_retries_until_reachable(self, db, monkeypatch):
+        import time
+        from db_utils import core
+        calls = {"n": 0}
+        real_connect = core._engine.connect
+
+        def flaky_connect():
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise self._shutting_down()
+            return real_connect()
+        monkeypatch.setattr(core._engine, "connect", flaky_connect)
+        monkeypatch.setattr(time, "sleep", lambda s: None)
+        assert core.wait_for_db(timeout=60, interval=0)
+        assert calls["n"] == 3
+
+    def _notify(self, monkeypatch, recovered):
+        import telegram_client as tg
+        from db_utils import core
+        sent = []
+        monkeypatch.setattr(core, "wait_for_db", lambda timeout=90, interval=5: recovered)
+        monkeypatch.setattr(tg, "get_creds", lambda *a: ("token", "chat"))
+        monkeypatch.setattr(tg, "send_message", lambda *a, **k: sent.append(a) or True)
+        return tg, sent
+
+    def test_no_alert_when_database_comes_back(self, db, monkeypatch):
+        tg, sent = self._notify(monkeypatch, recovered=True)
+        assert tg.notify_error("telegram_worker", error=self._shutting_down()) is False
+        assert sent == []
+
+    def test_alert_when_database_stays_down(self, db, monkeypatch):
+        tg, sent = self._notify(monkeypatch, recovered=False)
+        assert tg.notify_error("telegram_worker", error=self._shutting_down())
+        assert len(sent) == 1
+
+    def test_other_errors_alert_without_waiting(self, db, monkeypatch):
+        tg, sent = self._notify(monkeypatch, recovered=True)
+        assert tg.notify_error("data_fetcher", error=ValueError("boom"))
+        assert len(sent) == 1
