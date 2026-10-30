@@ -178,26 +178,41 @@ def get_indicators(
 ):
     """Returns price series + indicators (SMA/EMA/RSI/Bollinger), crossover markers,
     local extrema, and risk metrics for a symbol."""
-    prices = db.get_price_history(symbol, lookback_days=lookback_days)
+    smas = [int(x) for x in sma_periods.split(",") if x.strip()] if sma_periods else []
+    emas = [int(x) for x in ema_periods.split(",") if x.strip()] if ema_periods else []
+
+    # Load extra history before the visible window so long indicators (SMA 200,
+    # EMAs, Bollinger) are already populated on the first visible day instead
+    # of starting part-way through the chart. ~1.5 calendar days per trading day.
+    max_window = max([*smas, *emas, bb_window, window_rsi * 3])
+    warmup_days = int(max_window * 1.5) + 15
+    prices = db.get_price_history(symbol, lookback_days=lookback_days + warmup_days)
     if prices is None or prices.empty:
         raise HTTPException(404, f"No price data for {symbol}")
 
     # The history is forward-filled over weekends; indicator windows (SMA 200 =
     # 200 trading days) and annualised metrics (sqrt(252)) assume trading days.
     prices = _trading_days(prices, symbol)
-    close = pd.to_numeric(
+    window_start = pd.Timestamp.utcnow().tz_convert(None).normalize() - pd.Timedelta(days=lookback_days)
+    cut = int((pd.to_datetime(prices["date"]) < window_start).sum())
+    if cut >= len(prices):  # stale data: nothing inside the window, show what we have
+        cut = 0
+
+    close_full = pd.to_numeric(
         prices["adj_close"] if "adj_close" in prices.columns else prices["close"],
         errors="coerce"
     ).ffill().bfill()
+    close = close_full.iloc[cut:].reset_index(drop=True)
 
-    result = _df(prices)
-    smas = [int(x) for x in sma_periods.split(",") if x.strip()] if sma_periods else []
-    emas = [int(x) for x in ema_periods.split(",") if x.strip()] if ema_periods else []
+    def _visible(s):
+        return s.iloc[cut:].reset_index(drop=True)
+
+    result = _df(prices.iloc[cut:].reset_index(drop=True))
 
     # SMAs
     for w in smas:
         try:
-            s = mw.sma(close, w)
+            s = _visible(mw.sma(close_full, w))
             for i, row in enumerate(result):
                 row[f"sma_{w}"] = float(s.iloc[i]) if i < len(s) and pd.notna(s.iloc[i]) else None
         except Exception:
@@ -206,7 +221,7 @@ def get_indicators(
     # EMAs
     for e in emas:
         try:
-            s = mw.ema(close, e)
+            s = _visible(mw.ema(close_full, e))
             for i, row in enumerate(result):
                 row[f"ema_{e}"] = float(s.iloc[i]) if i < len(s) and pd.notna(s.iloc[i]) else None
         except Exception:
@@ -214,7 +229,7 @@ def get_indicators(
 
     # RSI
     try:
-        r = mw.rsi(close, window_rsi)
+        r = _visible(mw.rsi(close_full, window_rsi))
         for i, row in enumerate(result):
             row[f"rsi"] = float(r.iloc[i]) if i < len(r) and pd.notna(r.iloc[i]) else None
     except Exception:
@@ -223,7 +238,7 @@ def get_indicators(
     # Bollinger Bands — mw.bollinger returns (mid, upper, lower) tuple of Series
     if show_bb:
         try:
-            mid, upper, lower = mw.bollinger(close, bb_window, 2.0)
+            mid, upper, lower = (_visible(x) for x in mw.bollinger(close_full, bb_window, 2.0))
             for i, row in enumerate(result):
                 row["bb_mid"] = float(mid.iloc[i]) if i < len(mid) and pd.notna(mid.iloc[i]) else None
                 row["bb_upper"] = float(upper.iloc[i]) if i < len(upper) and pd.notna(upper.iloc[i]) else None
@@ -236,11 +251,11 @@ def get_indicators(
     if show_crossovers and len(smas) >= 1 and (len(emas) >= 1 or len(smas) >= 2):
         try:
             if len(emas) >= 1:
-                short_ma = mw.sma(close, smas[0])
-                long_ma = mw.ema(close, emas[0])
+                short_ma = _visible(mw.sma(close_full, smas[0]))
+                long_ma = _visible(mw.ema(close_full, emas[0]))
             else:
-                short_ma = mw.sma(close, smas[0])
-                long_ma = mw.sma(close, smas[1])
+                short_ma = _visible(mw.sma(close_full, smas[0]))
+                long_ma = _visible(mw.sma(close_full, smas[1]))
             buy_idx, sell_idx = mw.find_crossovers(short_ma, long_ma)
             dates = [r.get("date") for r in result]
             closes = [r.get("adj_close") or r.get("close") for r in result]

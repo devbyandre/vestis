@@ -5,6 +5,8 @@ import { analyticsApi, securitiesApi } from '../lib/api'
 import { qk } from '../lib/queryClient'
 import { fmt, plotlyConfig, distributionStats, normalPdf, linspace } from '../lib/utils'
 import { LoadingOverlay, ErrorMsg, MetricCard, SectionHeader, Expander, SortableTable } from '../components/ui'
+import KpiInsights from '../components/KpiInsights'
+import { evaluateGroups, insightContext } from '../lib/kpiInsights'
 
 const Plot = lazy(() =>
   // Vite's dev-mode CJS interop for this package can double-wrap the
@@ -29,6 +31,10 @@ const BASE = {
 const LOOKBACKS = [
   { value: 90, label: '3M' }, { value: 180, label: '6M' }, { value: 365, label: '1Y' },
   { value: 730, label: '2Y' }, { value: 1825, label: '5Y' },
+]
+const CHART_TYPES = [
+  { value: 'line', label: 'Line' }, { value: 'area', label: 'Area' },
+  { value: 'candles', label: 'Candles' }, { value: 'ohlc', label: 'OHLC' },
 ]
 const SMA_CHOICES = [5, 10, 20, 50, 100, 200]
 const EMA_CHOICES = [5, 10, 20, 50, 100, 200]
@@ -146,6 +152,8 @@ function FundamentalsGrid({ basic, metrics }) {
   )
 }
 
+const RATING_TEXT = { good: 'text-green-400', ok: 'text-amber-400', bad: 'text-red-400' }
+
 const COMPARE_COLORS = ['#38bdf8', '#f59e0b', '#22c55e', '#a78bfa', '#ef4444', '#f472b6']
 
 // ── Compare mode ──────────────────────────────────────────────────────────────
@@ -193,6 +201,34 @@ function TechnicalCompare({ securities }) {
   })
 
   const anyLoading = perSymbol.some(p => p.isLoading)
+
+  // One row per security with the evaluated key figures; sortable by the raw
+  // ratio, rendered with its rating colour.
+  const insightRows = perSymbol.filter(p => p.dates.length > 0).map(p => {
+    const row = { sym: p.sym, groups: evaluateGroups(insightContext({ basic: p.basic, metrics: p.metrics, closes: p.closes, periodDays: lookback })) }
+    for (const g of row.groups) {
+      row[`verdict_${g.id}`] = g.verdict?.label ?? '—'
+      for (const k of g.kpis) row[`${g.id}:${k.label}`] = k.value === Infinity ? null : k.value
+    }
+    return row
+  })
+  const insightCols = (groupId) => {
+    const group = evaluateGroups({ basic: {}, metrics: {} }).find(g => g.id === groupId)
+    return [
+      { key: 'sym', label: 'Security' },
+      { key: `verdict_${groupId}`, label: 'Verdict', render: (v, r) => {
+        const level = r.groups.find(g => g.id === groupId)?.verdict?.level
+        return <span className={RATING_TEXT[level] ?? 'text-gray-500'}>{v}</span>
+      } },
+      ...group.kpis.map(k => ({
+        key: `${groupId}:${k.label}`, label: k.label, align: 'right',
+        render: (_, r) => {
+          const e = r.groups.find(g => g.id === groupId).kpis.find(x => x.label === k.label)
+          return <span className={RATING_TEXT[e.rating] ?? ''} title={e.word ?? ''}>{e.display}</span>
+        },
+      })),
+    ]
+  }
   const ready = perSymbol.filter(p => p.dates.length > 0)
 
   const compareCols = (fields) => [
@@ -287,7 +323,21 @@ function TechnicalCompare({ securities }) {
             </div>
           </Expander>
 
-          <Expander title="Fundamentals Comparison" defaultOpen>
+          <Expander title="Key Figures Comparison" defaultOpen>
+            <div className="space-y-4">
+              {evaluateGroups({ basic: {}, metrics: {} }).map(g => (
+                <div key={g.id} className="overflow-x-auto">
+                  <p className="text-xs font-semibold text-gray-400 mb-2">
+                    {g.title}{g.periodBased && ` · ${LOOKBACKS.find(lb => lb.value === lookback)?.label}`}
+                    <span className="font-normal text-gray-600"> — {g.question}</span>
+                  </p>
+                  <SortableTable columns={insightCols(g.id)} data={insightRows} />
+                </div>
+              ))}
+            </div>
+          </Expander>
+
+          <Expander title="Underlying Figures Comparison (raw data)">
             <div className="space-y-4">
               {FUNDAMENTALS_GROUPS.map(g => (
                 <div key={g.title} className="overflow-x-auto">
@@ -308,7 +358,8 @@ function TechnicalDeepDive({ securities }) {
   const [lookback, setLookback] = useState(365)
   const [smaPeriods, setSmaPeriods] = useState([50, 200])
   const [emaPeriods, setEmaPeriods] = useState([])
-  const [showBB, setShowBB] = useState(false)
+  const [chartType, setChartType] = useState('line')
+  const [showBB, setShowBB] = useState(true)
   const [showCrossovers, setShowCrossovers] = useState(true)
   const [showExtrema, setShowExtrema] = useState(false)
   const [showVolume, setShowVolume] = useState(true)
@@ -341,11 +392,22 @@ function TechnicalDeepDive({ securities }) {
 
   const dates = series.map(r => r.date)
   const closes = series.map(r => r.adj_close ?? r.close)
-  const opens = series.map(r => r.open)
-  const highs = series.map(r => r.high)
-  const lows = series.map(r => r.low)
+  // open/high/low are raw prices while the close (and every indicator) is
+  // dividend/split-adjusted — scale each bar by adj_close/close so candles
+  // line up with the overlays instead of floating above them in older data.
+  const adjFactor = series.map(r => (r.adj_close != null && r.close) ? r.adj_close / r.close : 1)
+  const opens = series.map((r, i) => r.open != null ? r.open * adjFactor[i] : null)
+  const highs = series.map((r, i) => r.high != null ? r.high * adjFactor[i] : null)
+  const lows = series.map((r, i) => r.low != null ? r.low * adjFactor[i] : null)
+  const hasBB = series.some(r => r.bb_upper != null)
+  const areaYs = [...closes, ...(showBB ? series.flatMap(r => [r.bb_upper, r.bb_lower]) : [])].filter(v => v != null)
+  const areaRange = areaYs.length ? [Math.min(...areaYs) * 0.97, Math.max(...areaYs) * 1.03] : undefined
   const volumes = series.map(r => r.volume)
   const rsi = series.map(r => r.rsi)
+  const rsiCrossUp = dates.filter((_, i) => i > 0 && rsi[i - 1] < 30 && rsi[i] >= 30)
+  const rsiCrossDown = dates.filter((_, i) => i > 0 && rsi[i - 1] > 70 && rsi[i] <= 70)
+
+  const periodLabel = LOOKBACKS.find(lb => lb.value === lookback)?.label ?? ''
 
   const toggle = (arr, setArr, val) =>
     setArr(a => a.includes(val) ? a.filter(x => x !== val) : [...a, val])
@@ -362,6 +424,13 @@ function TechnicalDeepDive({ securities }) {
             <datalist id="tech-sec-list">
               {securities.map(s => <option key={s.symbol || s.yahoo_ticker} value={s.symbol || s.yahoo_ticker} />)}
             </datalist>
+          </div>
+          <div className="flex gap-1">
+            {CHART_TYPES.map(ct => (
+              <button key={ct.value}
+                className={`btn text-xs px-2 py-1 ${chartType === ct.value ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => setChartType(ct.value)}>{ct.label}</button>
+            ))}
           </div>
           <div className="flex gap-1">
             {LOOKBACKS.map(lb => (
@@ -413,21 +482,34 @@ function TechnicalDeepDive({ securities }) {
       {series.length > 0 && (
         <>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <MetricCard label="Volatility" value={metrics.volatility != null ? fmt.pct(metrics.volatility) : '—'} color={metrics.volatility > 0.3 ? 'text-warning' : ''} />
-            <MetricCard label="Sharpe" value={metrics.sharpe != null ? metrics.sharpe.toFixed(2) : '—'} color={metrics.sharpe < 0 ? 'text-red-400' : ''} />
-            {metrics.sortino != null && <MetricCard label="Sortino" value={metrics.sortino.toFixed(2)} />}
-            <MetricCard label="Max DD" value={metrics.max_drawdown != null ? fmt.pct(-Math.abs(metrics.max_drawdown)) : '—'} color="text-red-400" />
+            <MetricCard label="Volatility" value={metrics.volatility != null ? fmt.pct(metrics.volatility).replace('+', '') : '—'} color={metrics.volatility > 0.3 ? 'text-warning' : ''} sub={`annualised, ${periodLabel}`} />
+            <MetricCard label="Sharpe" value={metrics.sharpe != null ? metrics.sharpe.toFixed(2) : '—'} color={metrics.sharpe < 0 ? 'text-red-400' : ''} sub={`return per risk, ${periodLabel}`} />
+            {metrics.sortino != null && <MetricCard label="Sortino" value={metrics.sortino.toFixed(2)} sub={`return per downside risk, ${periodLabel}`} />}
+            <MetricCard label="Max DD" value={metrics.max_drawdown != null ? fmt.pct(-Math.abs(metrics.max_drawdown)) : '—'} color="text-red-400" sub={`worst fall, ${periodLabel}`} />
           </div>
 
           {/* Price chart */}
           <div className="card p-2">
             <LazyPlot
               data={[
-                {
-                  type: 'candlestick', x: dates, open: opens, high: highs, low: lows, close: closes, name: symbol,
-                  increasing: { line: { color: '#22c55e' }, fillcolor: '#22c55e' },
-                  decreasing: { line: { color: '#ef4444' }, fillcolor: '#ef4444' },
-                },
+                // Bands first so the price trace draws on top of the shaded area
+                ...(showBB && hasBB ? [
+                  { x: dates, y: series.map(r => r.bb_upper), type: 'scatter', name: 'BB Upper (20, 2σ)', line: { color: '#38bdf8', width: 1, dash: 'dot' } },
+                  { x: dates, y: series.map(r => r.bb_lower), type: 'scatter', name: 'BB Lower', fill: 'tonexty', fillcolor: 'rgba(56,189,248,0.08)', line: { color: '#38bdf8', width: 1, dash: 'dot' } },
+                  { x: dates, y: series.map(r => r.bb_mid), type: 'scatter', name: 'BB Mid', line: { color: 'rgba(56,189,248,0.5)', width: 1 } },
+                ] : []),
+                chartType === 'candles' || chartType === 'ohlc'
+                  ? {
+                    type: chartType === 'ohlc' ? 'ohlc' : 'candlestick',
+                    x: dates, open: opens, high: highs, low: lows, close: closes, name: symbol,
+                    increasing: { line: { color: '#22c55e' }, fillcolor: '#22c55e' },
+                    decreasing: { line: { color: '#ef4444' }, fillcolor: '#ef4444' },
+                  }
+                  : {
+                    type: 'scatter', mode: 'lines', x: dates, y: closes, name: symbol,
+                    line: { color: '#e5e7eb', width: 1.6 },
+                    ...(chartType === 'area' ? { fill: 'tozeroy', fillcolor: 'rgba(229,231,235,0.06)' } : {}),
+                  },
                 ...smaPeriods.map(w => ({
                   x: dates, y: series.map(r => r[`sma_${w}`]), type: 'scatter', name: `SMA ${w}`,
                   line: { color: SMA_COLORS[w] || '#f59e0b', width: 1.3, dash: 'dash' },
@@ -436,10 +518,6 @@ function TechnicalDeepDive({ securities }) {
                   x: dates, y: series.map(r => r[`ema_${e}`]), type: 'scatter', name: `EMA ${e}`,
                   line: { color: EMA_COLORS[e] || '#a78bfa', width: 1.3, dash: 'dot' },
                 })),
-                ...(showBB && series[0]?.bb_upper != null ? [
-                  { x: dates, y: series.map(r => r.bb_upper), type: 'scatter', name: 'BB Upper', line: { color: '#38bdf8', width: 1, dash: 'dot' } },
-                  { x: dates, y: series.map(r => r.bb_lower), type: 'scatter', name: 'BB Lower', fill: 'tonexty', fillcolor: 'rgba(56,189,248,0.05)', line: { color: '#38bdf8', width: 1, dash: 'dot' } },
-                ] : []),
                 ...(showCrossovers && crossovers.buy.length ? [{
                   x: crossovers.buy.map(c => c.date), y: crossovers.buy.map(c => c.price),
                   type: 'scatter', mode: 'markers', name: 'Buy Signal',
@@ -464,7 +542,8 @@ function TechnicalDeepDive({ securities }) {
               layout={{
                 ...BASE, title: { text: `${symbol} — in EUR`, font: { color: '#d1d5db', size: 14 } },
                 xaxis: { ...BASE.xaxis, rangeslider: { visible: false } },
-                yaxis: { ...BASE.yaxis, tickprefix: '€' },
+                // An area fills to zero, which would otherwise drag the axis down to €0
+                yaxis: { ...BASE.yaxis, tickprefix: '€', ...(chartType === 'area' ? { range: areaRange } : {}) },
                 legend: { bgcolor: 'transparent', font: { color: '#9ca3af', size: 10 }, orientation: 'h', y: -0.15 },
                 height: 460,
               }}
@@ -493,10 +572,14 @@ function TechnicalDeepDive({ securities }) {
           {rsi[0] != null && (
             <div className="card p-2">
               <LazyPlot
-                data={[{ type: 'scatter', x: dates, y: rsi, name: 'RSI', line: { color: '#a78bfa', width: 1.5 } }]}
+                data={[
+                  { type: 'scatter', x: dates, y: rsi, name: 'RSI', line: { color: '#a78bfa', width: 1.5 } },
+                  { type: 'scatter', mode: 'markers', x: rsiCrossUp, y: rsiCrossUp.map(() => 30), name: 'Leaves oversold (30↑)', marker: { color: '#22c55e', size: 7 } },
+                  { type: 'scatter', mode: 'markers', x: rsiCrossDown, y: rsiCrossDown.map(() => 70), name: 'Leaves overbought (70↓)', marker: { color: '#ef4444', size: 7 } },
+                ]}
                 layout={{
                   ...BASE, title: { text: 'RSI (14)', font: { color: '#d1d5db', size: 13 } },
-                  yaxis: { ...BASE.yaxis, range: [0, 100] },
+                  yaxis: { ...BASE.yaxis, range: [0, 100] }, showlegend: false,
                   shapes: [
                     { type: 'line', x0: dates[0], x1: dates[dates.length - 1], y0: 70, y1: 70, line: { color: '#ef4444', dash: 'dot', width: 1 } },
                     { type: 'line', x0: dates[0], x1: dates[dates.length - 1], y0: 30, y1: 30, line: { color: '#22c55e', dash: 'dot', width: 1 } },
@@ -512,7 +595,14 @@ function TechnicalDeepDive({ securities }) {
             <ReturnDistribution symbol={symbol} closes={closes} />
           </Expander>
 
-          <Expander title="Fundamentals & Financial Overview" defaultOpen>
+          <Expander title="Key Figures at a Glance" defaultOpen>
+            {basic
+              ? <KpiInsights basic={basic} metrics={metrics} closes={closes} dates={dates}
+                  sma200={series[series.length - 1]?.sma_200 ?? null} periodLabel={periodLabel} periodDays={lookback} />
+              : <LoadingOverlay label="Loading fundamentals…" />}
+          </Expander>
+
+          <Expander title="Underlying Figures (raw data)">
             {basic ? <FundamentalsGrid basic={basic} metrics={metrics} /> : <LoadingOverlay label="Loading fundamentals…" />}
           </Expander>
         </>

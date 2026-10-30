@@ -2,6 +2,7 @@ import { useState, useMemo, lazy, Suspense } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { holdingsApi, portfolioApi, planningApi } from '../lib/api'
 import { qk } from '../lib/queryClient'
+import { setUrlParams } from '../lib/urlState'
 import { fmt, pnlColor, plotlyConfig, kpiColor, temperatureBadgeClass } from '../lib/utils'
 import { clsx } from 'clsx'
 import {
@@ -331,8 +332,16 @@ export default function TabPortfolio() {
     exchange: [...new Set(snapshot.map(r => r.exchange).filter(Boolean))].sort(),
   }), [snapshot])
 
+  // Security name → Technical tab with that security preselected
+  const securityLink = (v, row) => row.symbol ? (
+    <button className="text-left hover:text-accent-bright hover:underline" title={`Open ${row.symbol} in Technical`}
+      onClick={() => setUrlParams({ tab: 'technical', symbol: row.symbol, mode: null }, { push: true })}>
+      {v}
+    </button>
+  ) : v
+
   const HOLDINGS_COLS = [
-    { key: 'security_label', label: 'Security' },
+    { key: 'security_label', label: 'Security', render: securityLink },
     { key: 'quantity', label: 'Qty', align: 'right', render: v => fmt.num(v, 4), exportValue: v => v },
     { key: 'cost_basis', label: 'Total Cost', align: 'right', render: v => fmt.currency(v), exportValue: v => v },
     { key: 'market_value', label: 'Market Value', align: 'right', render: v => fmt.currency(v), exportValue: v => v },
@@ -342,7 +351,7 @@ export default function TabPortfolio() {
   ]
 
   const KPI_COLS = [
-    { key: 'security_label', label: 'Security' },
+    { key: 'security_label', label: 'Security', render: securityLink },
     { key: 'regularMarketPrice', label: 'Price', align: 'right', render: v => fmt.currency(v, 2) },
     { key: 'fiftyTwoWeekLow', label: '52w Low', align: 'right', render: v => fmt.currency(v, 2) },
     { key: 'fiftyTwoWeekHigh', label: '52w High', align: 'right', render: v => fmt.currency(v, 2) },

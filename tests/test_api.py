@@ -351,6 +351,24 @@ class TestAnalyticsAPI:
         assert "calmar" in metrics
         assert "treynor" in metrics
 
+    def test_indicators_warm_up_long_windows_before_visible_range(self, api_client, db_path):
+        # SMA 50 / Bollinger must already be populated on the first visible day
+        # (history before the lookback window is loaded as warm-up).
+        sec_id = seed_security(db_path, "AAPL")
+        seed(db_path, "INSERT INTO securities_cache (security_id, currency) VALUES (?, 'EUR')", (sec_id,))
+        for i in range(200):
+            seed(db_path,
+                 "INSERT INTO prices (security_id, date, open, high, low, close, adj_close, volume) "
+                 "VALUES (?, date('now', '-' || (200 - ?) || ' days'), 100, 105, 95, ?, ?, 1000)",
+                 (sec_id, i, 100 + i % 7, 100 + i % 7))
+        r = api_client.get("/analytics/indicators/AAPL",
+                           params={"lookback_days": 60, "sma_periods": "50", "show_bb": True})
+        assert r.status_code == 200
+        series = r.json()["series"]
+        assert 30 < len(series) < 50  # ~60 calendar days of trading days only
+        assert series[0]["sma_50"] is not None
+        assert series[0]["bb_upper"] is not None
+
     def test_rebalancing_with_holdings_returns_200(self, api_client, db_path):
         # Regression test: industry_weights is keyed by (sector, industry)
         # tuples internally, which crashed FastAPI's JSON encoder
