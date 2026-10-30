@@ -46,7 +46,15 @@ export const KPI_GROUPS = [
         hint: 'Like P/E, but on analysts’ expected earnings for the next 12 months. Lower than the P/E means profits are expected to grow.',
       },
       {
-        label: 'EV / EBITDA', value: ({ basic }) => { const e = num(basic.ebitda); return e > 0 ? ratio(basic.enterpriseValue, e) : null },
+        // EV built from market cap + debt − cash: Yahoo's own enterpriseValue
+        // is wrong for ADRs (TSM: reporting-currency EV off by the ADR ratio).
+        label: 'EV / EBITDA', value: ({ basic }) => {
+          const e = num(basic.ebitda)
+          if (!(e > 0)) return null
+          const mc = num(basic.marketCap), debt = num(basic.totalDebt), cash = num(basic.totalCash)
+          const ev = mc != null && debt != null && cash != null ? mc + debt - cash : num(basic.enterpriseValue)
+          return ratio(ev, e)
+        },
         format: x1, rate: lowerBetter(10, 15), words: VALUATION_WORDS,
         hint: 'Company value incl. debt ÷ operating profit before depreciation. Unlike P/E it isn’t distorted by debt or tax. <10 cheap · 10–15 typical · >15 expensive. Not meaningful for banks/insurers.',
       },

@@ -278,6 +278,58 @@ class TestFXRates:
         assert len(series) == 5
         assert all(abs(v - 1.15) < 1e-6 for v in series.values)
 
+    def test_unknown_pair_strict_returns_none(self, db):
+        assert db.get_latest_fx_rate_or_none("XYZ", "EUR") is None
+        assert db.get_latest_fx_rate_or_none("EUR", "EUR") == pytest.approx(1.0)
+
+    def _seed_adr(self, db_path, financial_currency):
+        # TSM-like: trades in USD, reports in TWD
+        sec_id = seed_security(db_path, "TSM")
+        seed(db_path, """
+            INSERT INTO securities_cache (security_id, currency, financialCurrency, regularMarketPrice,
+                marketCap, totalRevenue, ebitda, enterpriseValue, bookValue, revenuePerShare)
+            VALUES (?, 'USD', ?, 400, 2000, 5000, 3000, 14000, 5.2, 119)
+        """, (sec_id, financial_currency))
+        return sec_id
+
+    def test_cache_converts_report_figures_with_reporting_currency(self, db, db_path):
+        sec_id = self._seed_adr(db_path, "TWD")
+        db.store_fx_rates(pd.DataFrame([
+            {"date": "2023-06-02", "base_currency": "USD", "target_currency": "EUR", "rate": 0.9},
+            {"date": "2023-06-02", "base_currency": "TWD", "target_currency": "EUR", "rate": 0.03},
+        ]))
+        row = db.get_security_cache(sec_id).iloc[0]
+        assert row["regularMarketPrice"] == pytest.approx(360)    # USD rate
+        assert row["marketCap"] == pytest.approx(1800)
+        assert row["totalRevenue"] == pytest.approx(150)          # TWD rate
+        assert row["ebitda"] == pytest.approx(90)
+        assert row["enterpriseValue"] == pytest.approx(420)
+        assert row["bookValue"] is None                           # per ordinary share, not per ADR
+        assert row["revenuePerShare"] is None
+
+    def test_cache_blanks_report_figures_without_fx_rate(self, db, db_path):
+        sec_id = self._seed_adr(db_path, "TWD")
+        db.store_fx_rates(pd.DataFrame([
+            {"date": "2023-06-02", "base_currency": "USD", "target_currency": "EUR", "rate": 0.9},
+        ]))
+        row = db.get_security_cache(sec_id).iloc[0]
+        assert row["marketCap"] == pytest.approx(1800)
+        assert row["totalRevenue"] is None
+        assert row["ebitda"] is None
+
+    def test_cache_without_financial_currency_uses_trading_currency(self, db, db_path):
+        sec_id = self._seed_adr(db_path, None)
+        db.store_fx_rates(pd.DataFrame([
+            {"date": "2023-06-02", "base_currency": "USD", "target_currency": "EUR", "rate": 0.9},
+        ]))
+        row = db.get_security_cache(sec_id).iloc[0]
+        assert row["totalRevenue"] == pytest.approx(4500)
+        assert row["bookValue"] == pytest.approx(5.2 * 0.9)
+
+    def test_reporting_currencies_get_fx_rates(self, db, db_path):
+        self._seed_adr(db_path, "TWD")
+        assert set(db.get_all_security_currencies()) == {"USD", "TWD"}
+
     def test_get_latest_fx_date(self, db):
         self._seed_fx(db)
         latest = db.get_latest_fx_date("USD")

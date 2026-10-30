@@ -6,8 +6,13 @@ from .core import get_conn, _adapt_sql, _read_sql, _IS_POSTGRES
 
 
 def get_all_security_currencies() -> List[str]:
-    df = _read_sql("SELECT DISTINCT currency FROM securities_cache WHERE currency IS NOT NULL")
-    return df["currency"].tolist()
+    """Trading and reporting currencies — both need FX rates to EUR."""
+    df = _read_sql("""
+        SELECT currency AS c FROM securities_cache WHERE currency IS NOT NULL
+        UNION
+        SELECT financialCurrency AS c FROM securities_cache WHERE financialCurrency IS NOT NULL
+    """)
+    return df["c"].tolist()
 
 
 def get_earliest_price_or_dividend_date() -> Optional[str]:
@@ -54,6 +59,19 @@ def _major(currency: str) -> Tuple[str, float]:
     if currency in _MINOR_UNITS:
         return _MINOR_UNITS[currency]
     return (currency or "EUR").upper(), 1.0
+
+
+def get_latest_fx_rate_or_none(base_currency: str, target_currency: str = "EUR") -> Optional[float]:
+    """Like get_latest_fx_rate, but None instead of a 1:1 guess when no rate is stored."""
+    base, divisor = _major(base_currency)
+    if base == target_currency.upper():
+        return 1.0 / divisor
+    df = _read_sql("""
+        SELECT rate FROM fx_rates
+        WHERE base_currency=? AND target_currency=?
+        ORDER BY date DESC LIMIT 1
+    """, (base, target_currency.upper()))
+    return None if df.empty else float(df.iloc[0]["rate"]) / divisor
 
 
 def get_latest_fx_rate(base_currency: str, target_currency: str = "EUR") -> float:

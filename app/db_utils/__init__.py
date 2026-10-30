@@ -134,6 +134,7 @@ from .fx import (
     store_fx_rates,
     get_latest_fx_date,
     get_latest_fx_rate,
+    get_latest_fx_rate_or_none,
     get_fx_series,
 )
 

@@ -2,7 +2,7 @@ from typing import Optional
 import pandas as pd
 
 from .core import get_conn, _adapt_sql, _read_sql, _IS_POSTGRES, _ph
-from .fx import get_latest_fx_rate
+from .fx import get_latest_fx_rate, get_latest_fx_rate_or_none
 
 
 def store_security_cache(security_id: int, info: dict) -> None:
@@ -15,7 +15,7 @@ def store_security_cache(security_id: int, info: dict) -> None:
         "dividendRate", "dividendYield", "enterpriseValue", "profitMargins", "operatingMargins",
         "returnOnAssets", "returnOnEquity", "totalRevenue", "revenuePerShare", "grossProfits",
         "ebitda", "totalCash", "totalDebt", "currentRatio", "bookValue", "operatingCashflow",
-        "freeCashflow", "sharesOutstanding", "currency",
+        "freeCashflow", "sharesOutstanding", "currency", "financialCurrency",
     ]
     numeric_keys = [
         "regularMarketPrice", "fiftyTwoWeekHigh", "fiftyTwoWeekLow", "volume", "averageVolume",
@@ -158,13 +158,19 @@ _KPI_KEYS = [
     "dividendRate", "dividendYield", "enterpriseValue", "profitMargins", "operatingMargins",
     "returnOnAssets", "returnOnEquity", "totalRevenue", "revenuePerShare", "grossProfits",
     "ebitda", "totalCash", "totalDebt", "currentRatio", "bookValue",
-    "operatingCashflow", "freeCashflow", "sharesOutstanding",
+    "operatingCashflow", "freeCashflow", "sharesOutstanding", "financialCurrency",
 ]
-_MONETARY = [
-    "regularMarketPrice", "fiftyTwoWeekHigh", "fiftyTwoWeekLow", "marketCap", "dividendRate",
-    "enterpriseValue", "totalRevenue", "revenuePerShare", "grossProfits", "ebitda",
-    "totalCash", "totalDebt", "bookValue", "operatingCashflow", "freeCashflow",
+# Quote-based figures are in the trading currency; figures from the company's
+# reports are in its reporting currency (Yahoo's financialCurrency) — for TSM
+# that's USD vs TWD. Yahoo's enterpriseValue is in the reporting currency too.
+_PRICE_FIELDS = ["regularMarketPrice", "fiftyTwoWeekHigh", "fiftyTwoWeekLow", "marketCap", "dividendRate"]
+_REPORT_FIELDS = [
+    "enterpriseValue", "totalRevenue", "grossProfits", "ebitda",
+    "totalCash", "totalDebt", "operatingCashflow", "freeCashflow",
 ]
+# Per-share report figures are per *ordinary* share, which isn't the traded
+# share for ADRs (1 TSM ADR = 5 shares) — unusable when the currencies differ.
+_REPORT_PER_SHARE_FIELDS = ["revenuePerShare", "bookValue"]
 _CACHE_SQL = """
     SELECT s.id, s.yahoo_ticker AS symbol, sc.*
     FROM securities s
@@ -181,14 +187,29 @@ def _cache_row_in_eur(data: dict, rates: dict) -> dict:
             data[k] = data.pop(k.lower())
         else:
             data.setdefault(k, None)
-    currency = data.get("currency") or "EUR"
-    if currency not in rates:
-        rates[currency] = get_latest_fx_rate(currency)
-    fx = rates[currency]
-    if fx != 1.0:
-        for field in _MONETARY:
+    def rate(cur, strict=False):
+        key = (cur, strict)
+        if key not in rates:
+            rates[key] = get_latest_fx_rate_or_none(cur) if strict else get_latest_fx_rate(cur)
+        return rates[key]
+
+    def convert(fields, fx):
+        for field in fields:
             if data.get(field) is not None:
-                data[field] = data[field] * fx
+                data[field] = data[field] * fx if fx is not None else None
+
+    currency = data.get("currency") or "EUR"
+    convert(_PRICE_FIELDS, rate(currency))
+
+    fin = data.get("financialCurrency")
+    if not fin or fin == currency:
+        # Not refreshed since the column was added, or a plain listing
+        convert(_REPORT_FIELDS + _REPORT_PER_SHARE_FIELDS, rate(currency))
+    else:
+        # No silent 1:1 here — a missing TWD rate would inflate revenue ~30×.
+        # Blank figures show as "—" instead.
+        convert(_REPORT_FIELDS, rate(fin, strict=True))
+        convert(_REPORT_PER_SHARE_FIELDS, None)
     return data
 
 

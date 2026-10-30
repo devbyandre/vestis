@@ -12,7 +12,8 @@ describe('evaluateGroups', () => {
       metrics: {},
     })
     expect(kpi(groups, 'valuation', 'P/E')).toMatchObject({ value: 12, rating: 'good', word: 'cheap' })
-    expect(kpi(groups, 'valuation', 'EV / EBITDA')).toMatchObject({ value: 20, rating: 'bad', word: 'expensive' })
+    // EV = market cap 100 + debt 30 − cash 50 = 80 → 8× EBITDA (Yahoo's EV of 200 is ignored)
+    expect(kpi(groups, 'valuation', 'EV / EBITDA')).toMatchObject({ value: 8, rating: 'good', word: 'cheap' })
     expect(kpi(groups, 'valuation', 'Price / Sales').value).toBe(5)
     expect(kpi(groups, 'valuation', 'FCF yield')).toMatchObject({ value: 0.08, rating: 'good' })
     expect(kpi(groups, 'health', 'Net debt / EBITDA')).toMatchObject({ display: 'net cash', rating: 'good' })

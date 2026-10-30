@@ -95,6 +95,7 @@ DDL_STATEMENTS = [
         freeCashflow       BIGINT,
         sharesOutstanding  BIGINT,
         currency           TEXT,
+        financialCurrency  TEXT,
         kpis_updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (security_id) REFERENCES securities(id)
     )""",
@@ -356,6 +357,20 @@ def init_db():
                     conn.execute(text("ALTER TABLE alerts ADD COLUMN state TEXT"))
         except Exception as exc:
             logging.warning(f"alerts.state migration skipped: {exc}")
+
+    # Migration: securities_cache.financialCurrency — the currency a company
+    # reports in (TSM trades in USD but reports in TWD). Adds an empty column
+    # only; the next KPI refresh fills it.
+    try:
+        with engine.begin() as conn:
+            if is_postgres:
+                conn.execute(text("ALTER TABLE securities_cache ADD COLUMN IF NOT EXISTS financialCurrency TEXT"))
+            else:
+                cols = [r[1].lower() for r in conn.execute(text("PRAGMA table_info(securities_cache)"))]
+                if "financialcurrency" not in cols:
+                    conn.execute(text("ALTER TABLE securities_cache ADD COLUMN financialCurrency TEXT"))
+    except Exception as exc:
+        logging.warning(f"securities_cache.financialCurrency migration skipped: {exc}")
 
     # Migration: news abstracts (headline + abstract sentiment). Adds empty columns only.
     for table in ("news", "market_news"):

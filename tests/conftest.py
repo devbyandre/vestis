@@ -100,6 +100,7 @@ def apply_schema(conn):
             freeCashflow         BIGINT,
             sharesOutstanding    BIGINT,
             currency             TEXT,
+            financialCurrency    TEXT,
             kpis_updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(security_id) REFERENCES securities(id)
         );
