@@ -326,6 +326,21 @@ class TestFXRates:
         assert row["totalRevenue"] == pytest.approx(4500)
         assert row["bookValue"] == pytest.approx(5.2 * 0.9)
 
+    def test_pence_quote_with_pound_reports_keeps_per_share_figures(self, db, db_path):
+        sec_id = seed_security(db_path, "DGE.L")
+        seed(db_path, """
+            INSERT INTO securities_cache (security_id, currency, financialCurrency, regularMarketPrice,
+                totalRevenue, bookValue)
+            VALUES (?, 'GBp', 'GBP', 1400, 1000, 4.0)
+        """, (sec_id,))
+        db.store_fx_rates(pd.DataFrame([
+            {"date": "2023-06-02", "base_currency": "GBP", "target_currency": "EUR", "rate": 1.2},
+        ]))
+        row = db.get_security_cache(sec_id).iloc[0]
+        assert row["regularMarketPrice"] == pytest.approx(16.8)  # 1400 pence
+        assert row["totalRevenue"] == pytest.approx(1200)        # pounds, not pence
+        assert row["bookValue"] == pytest.approx(4.8)
+
     def test_reporting_currencies_get_fx_rates(self, db, db_path):
         self._seed_adr(db_path, "TWD")
         assert set(db.get_all_security_currencies()) == {"USD", "TWD"}

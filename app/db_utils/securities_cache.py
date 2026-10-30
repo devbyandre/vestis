@@ -2,7 +2,7 @@ from typing import Optional
 import pandas as pd
 
 from .core import get_conn, _adapt_sql, _read_sql, _IS_POSTGRES, _ph
-from .fx import get_latest_fx_rate, get_latest_fx_rate_or_none
+from .fx import get_latest_fx_rate, get_latest_fx_rate_or_none, _major
 
 
 def store_security_cache(security_id: int, info: dict) -> None:
@@ -209,7 +209,9 @@ def _cache_row_in_eur(data: dict, rates: dict) -> dict:
         # No silent 1:1 here — a missing TWD rate would inflate revenue ~30×.
         # Blank figures show as "—" instead.
         convert(_REPORT_FIELDS, rate(fin, strict=True))
-        convert(_REPORT_PER_SHARE_FIELDS, None)
+        # GBp quote / GBP report is the same share, just pence vs pounds
+        same_share = _major(currency)[0] == _major(fin)[0]
+        convert(_REPORT_PER_SHARE_FIELDS, rate(fin, strict=True) if same_share else None)
     return data
 
 
