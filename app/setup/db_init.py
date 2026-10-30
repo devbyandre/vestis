@@ -387,13 +387,20 @@ def init_db():
 
     # Migration: dividendYield used to be stored in percent. Where rate/price
     # shows a row is still in percent, convert it to a fraction (idempotent).
+    # London & co. quote prices in the minor unit (GBp = pence) but the
+    # dividend rate in the major one — without scaling the price, a correct
+    # fraction looked like percent and was divided by 100 on every deploy.
+    # ETFs have no dividendRate; a yield above 100% can only be percent.
     try:
         with engine.begin() as conn:
             res = conn.execute(text("""
                 UPDATE securities_cache SET dividendYield = dividendYield / 100.0
-                WHERE dividendYield > 0 AND dividendRate > 0 AND regularMarketPrice > 0
-                  AND ABS(dividendYield - 100.0 * dividendRate / regularMarketPrice)
-                    < ABS(dividendYield - dividendRate / regularMarketPrice)
+                WHERE dividendYield > 0 AND (
+                    (dividendRate > 0 AND regularMarketPrice > 0
+                     AND ABS(dividendYield - 100.0 * dividendRate * (CASE WHEN currency IN ('GBp', 'GBX', 'ZAc', 'ILA') THEN 100.0 ELSE 1.0 END) / regularMarketPrice)
+                       < ABS(dividendYield - dividendRate * (CASE WHEN currency IN ('GBp', 'GBX', 'ZAc', 'ILA') THEN 100.0 ELSE 1.0 END) / regularMarketPrice))
+                    OR ((dividendRate IS NULL OR dividendRate = 0) AND dividendYield > 1)
+                )
             """))
             if res.rowcount:
                 logging.info(f"Converted {res.rowcount} dividend yields from percent to fractions")

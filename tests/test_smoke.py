@@ -272,6 +272,52 @@ class TestDBInit:
         missing = expected - tables
         assert not missing, f"Missing tables after db_init: {missing}"
 
+    def test_dividend_yield_migration_is_idempotent(self, monkeypatch, tmp_path):
+        # Regression: GBp prices are in pence while dividendRate is in pounds,
+        # so already-converted London yields were divided by 100 again on
+        # every deploy. ETFs (no dividendRate) were never converted at all.
+        db_path = _fresh_db(tmp_path)
+        _patch_modules(monkeypatch, db_path)
+        for mod in list(sys.modules.keys()):
+            if "db_init" in mod or mod == "db_utils" or mod.startswith("db_utils."):
+                monkeypatch.delitem(sys.modules, mod, raising=False)
+        import importlib.util, os
+        spec = importlib.util.spec_from_file_location(
+            "db_init", os.path.join(APP_DIR, "setup", "db_init.py"))
+        db_init = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(db_init)
+        db_init.init_db()
+
+        conn = sqlite3.connect(db_path)
+        rows = [  # ticker, currency, dividendYield (as stored), dividendRate, price
+            ("DGE.L", "GBp", 4.48, 0.63, 1400.0),    # percent → 0.0448
+            ("CRH.L", "GBp", 0.0148, 1.11, 7532.0),  # already a fraction
+            ("MSFT", "USD", 0.95, 3.64, 381.87),     # percent → 0.0095
+            ("KO", "USD", 0.03, 2.0, 66.0),          # already a fraction
+            ("VGER.DE", "EUR", 2.03, None, 31.9),    # ETF in percent → 0.0203
+        ]
+        for i, (t, cur, y, r, p) in enumerate(rows, start=1):
+            conn.execute("INSERT INTO securities (id, yahoo_ticker) VALUES (?, ?)", (100 + i, t))
+            conn.execute(
+                "INSERT INTO securities_cache (security_id, currency, dividendYield, dividendRate, regularMarketPrice) "
+                "VALUES (?, ?, ?, ?, ?)", (100 + i, cur, y, r, p))
+        conn.commit()
+        conn.close()
+
+        db_init.init_db()
+        db_init.init_db()  # second deploy must not change anything
+
+        conn = sqlite3.connect(db_path)
+        got = dict(conn.execute(
+            "SELECT s.yahoo_ticker, sc.dividendYield FROM securities_cache sc "
+            "JOIN securities s ON s.id = sc.security_id").fetchall())
+        conn.close()
+        assert got["DGE.L"] == pytest.approx(0.0448)
+        assert got["CRH.L"] == pytest.approx(0.0148)
+        assert got["MSFT"] == pytest.approx(0.0095)
+        assert got["KO"] == pytest.approx(0.03)
+        assert got["VGER.DE"] == pytest.approx(0.0203)
+
     def test_default_portfolio_created(self, monkeypatch, tmp_path):
         db_path = _fresh_db(tmp_path)
         _patch_modules(monkeypatch, db_path)
