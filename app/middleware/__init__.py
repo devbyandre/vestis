@@ -120,4 +120,4 @@ from .fx import (
     store_fx_rates,
 )
 
-from .tax_planning import plan as plan_tax_sales
+from .tax_planning import plan as plan_tax_sales, estimate_tax

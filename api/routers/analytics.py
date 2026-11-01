@@ -37,41 +37,18 @@ def get_dividends(
     df = mw.calc_dividends_for_portfolio(portfolio_ids=ids, year=year)
     return _df(df)
 
-def _estimate_tax(by_year: dict, tax_rate: float, allowance: float,
-                  portfolio_ids, year) -> float:
-    """German-style estimate: per calendar year, net gains and dividends, carry
-    unused losses forward, deduct the yearly allowance, tax the rest."""
-    years = by_year
-    if year is not None:
-        # Losses carried into the selected year come from all earlier years.
-        full = {}
-        cg = mw.calc_capital_gains_fifo(portfolio_ids=portfolio_ids)
-        if cg is not None and not cg.empty:
-            for y, g in cg.groupby("year"):
-                if int(y) < int(year):
-                    full[int(y)] = {"gains": float(g["profit"].sum()), "dividends": 0.0}
-        dv = mw.calc_dividends_for_portfolio(portfolio_ids=portfolio_ids)
-        if dv is not None and not dv.empty:
-            for y, g in dv.groupby("year"):
-                if int(y) < int(year):
-                    full.setdefault(int(y), {"gains": 0.0, "dividends": 0.0})["dividends"] = float(g["total"].sum())
-        years = {**full, **by_year}
-    carry, tax = 0.0, 0.0
-    for y in sorted(years):
-        income = years[y]["gains"] + years[y]["dividends"] + carry
-        carry = min(0.0, income)
-        due = max(0.0, income - allowance) * tax_rate
-        if year is None or int(y) == int(year):
-            tax += due
-    return tax
-
-
 @router.get("/analytics/revenues-summary")
 def get_revenues_summary(portfolio_ids: Optional[str] = Query(None), year: Optional[int] = None):
     """Aggregated capital gains + dividends for the Revenues tab charts."""
     ids = [int(x) for x in portfolio_ids.split(",")] if portfolio_ids else None
-    cg = mw.calc_capital_gains_fifo(portfolio_ids=ids, year=year)
-    dv = mw.calc_dividends_for_portfolio(portfolio_ids=ids, year=year)
+    # Full history: the tax estimate needs earlier years for loss carry-forward
+    cg_all = mw.calc_capital_gains_fifo(portfolio_ids=ids)
+    dv_all = mw.calc_dividends_for_portfolio(portfolio_ids=ids)
+    estimated_tax = mw.estimate_tax(cg_all, dv_all, year)
+    cg, dv = cg_all, dv_all
+    if year is not None:
+        cg = cg_all[cg_all["year"] == int(year)] if cg_all is not None and not cg_all.empty else cg_all
+        dv = dv_all[dv_all["year"] == int(year)] if dv_all is not None and not dv_all.empty else dv_all
 
     tax_rate = 0.26375
     try:
@@ -109,7 +86,6 @@ def get_revenues_summary(portfolio_ids: Optional[str] = Query(None), year: Optio
             allowance = float(get_config("tax_allowance"))
     except Exception:
         pass
-    estimated_tax = _estimate_tax(by_year, tax_rate, allowance, ids, year)
 
     # By security
     by_sec = {}

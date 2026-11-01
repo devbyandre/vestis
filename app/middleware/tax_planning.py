@@ -116,6 +116,29 @@ def _realised_by_year(realised, dividends, categories, exemption):
     return by_year
 
 
+def estimate_tax(capital_gains: pd.DataFrame, dividends: pd.DataFrame, year: Optional[int] = None) -> float:
+    """Tax for `year` (or all years summed) under the same rules as plan():
+    loss pots, carry-forward, allowance, fund partial exemption, crypto
+    excluded. Pass the full history — earlier years feed the carry-forward."""
+    rate = _cfg_float("tax_rate", 0.26375)
+    allowance = _cfg_float("tax_allowance", 1000.0)
+    exemption = _cfg_float("fund_partial_exemption", 0.30)
+    realised = capital_gains.to_dict("records") if capital_gains is not None and not capital_gains.empty else []
+    symbols = {r["symbol"] for r in realised}
+    if dividends is not None and not dividends.empty:
+        symbols |= set(dividends["symbol"])
+    cache = db.get_security_cache_many(symbols)
+    categories = {s: _category((cache.get(s) or {}).get("security_type")) for s in symbols}
+    by_year = _realised_by_year(realised, dividends, categories, exemption)
+    total = 0.0
+    for y in by_year:
+        if year is not None and y != int(year):
+            continue
+        cs, co = _carry_forward(by_year, y)
+        total += TaxModel(rate, allowance, by_year[y]["stock"], by_year[y]["other"], cs, co).tax()
+    return total
+
+
 class Position:
     """One security in one account: open lots oldest first, sold strictly in order."""
 

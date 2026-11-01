@@ -143,6 +143,24 @@ class TestPlan:
         assert free["2024-02-29"] == ("2025-03-02", True)    # leap day
 
 
+class TestEstimateTax:
+    def test_uses_pots_exemption_and_carry_forward(self, tp, monkeypatch):
+        cfg = {"tax_rate": 0.25, "tax_allowance": 1000, "fund_partial_exemption": 0.3}
+        monkeypatch.setattr(tp, "get_config", lambda k: cfg.get(k))
+        monkeypatch.setattr(tp.db, "get_security_cache_many", lambda syms: {
+            "STK": {"security_type": "EQUITY"}, "ETF": {"security_type": "ETF"}, "BTC": {"security_type": "CRYPTOCURRENCY"}})
+        cg = pd.DataFrame([
+            {"symbol": "STK", "profit": -2000.0, "year": 2024},   # stock loss: can't offset ETF gains
+            {"symbol": "ETF", "profit": 5000.0, "year": 2024},    # 3,500 taxable
+            {"symbol": "BTC", "profit": 9000.0, "year": 2024},    # crypto: not Abgeltungsteuer
+            {"symbol": "STK", "profit": 3000.0, "year": 2025},    # 1,000 left after the carried 2,000
+        ])
+        dv = pd.DataFrame(columns=["symbol", "total", "year"])
+        assert tp.estimate_tax(cg, dv, 2024) == pytest.approx((3500 - 1000) * 0.25)
+        assert tp.estimate_tax(cg, dv, 2025) == pytest.approx(0)
+        assert tp.estimate_tax(cg, dv) == pytest.approx(625)
+
+
 def test_endpoint_with_empty_portfolio(api_client):
     r = api_client.get("/planning/tax-sales", params={"target_amount": 1000})
     assert r.status_code == 200
