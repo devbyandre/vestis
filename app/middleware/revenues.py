@@ -83,10 +83,27 @@ def calc_capital_gains_fifo(portfolio_ids: Optional[list] = None, year: Optional
     if df_tx.empty:
         return pd.DataFrame(columns=['portfolio_id','symbol','sell_date','quantity','proceeds','cost_basis','profit','year'])
 
+    rows, _ = run_fifo(df_tx)
+    if year:
+        rows = [r for r in rows if r['year'] == int(year)]
+    return pd.DataFrame(rows, columns=['portfolio_id','symbol','sell_date','quantity','proceeds','cost_basis','profit','year'])
+
+
+def run_fifo(df_tx: pd.DataFrame):
+    """FIFO per portfolio (= per broker account, as German tax law applies it).
+
+    Returns (realised sells, open lots). Open lots: {(portfolio_id, symbol):
+    [{'qty', 'price', 'fees', 'date'}, ...]} oldest first — what a sale today
+    would consume, in order.
+    """
+    if df_tx.empty:
+        return [], {}
+    df_tx = df_tx.copy()
     df_tx['tx_date'] = pd.to_datetime(df_tx['date'])
     # Apply split adjustments before FIFO — splits are not taxable events
     df_tx = apply_splits_to_transactions(df_tx)
     rows = []
+    open_lots = {}
 
     for pid, g in df_tx.groupby('portfolio_id'):
         buys = {}
@@ -96,8 +113,6 @@ def calc_capital_gains_fifo(portfolio_ids: Optional[list] = None, year: Optional
                 continue  # skip if no symbol
 
             typ = r['type'].lower()
-
-
             qty = float(r['quantity'])
             price = float(r['price']) if r['price'] else 0.0
             fees = float(r.get('fees') or 0.0)
@@ -118,10 +133,6 @@ def calc_capital_gains_fifo(portfolio_ids: Optional[list] = None, year: Optional
                     remaining -= take
                     if b['qty'] <= 1e-12:
                         buys[sym].pop(0)
-                profit = proceeds - cost_basis
-                yr = int(pd.to_datetime(r['tx_date']).year)
-                if year and yr != int(year):
-                    continue
                 rows.append({
                     'portfolio_id': pid,
                     'symbol': sym,
@@ -129,7 +140,11 @@ def calc_capital_gains_fifo(portfolio_ids: Optional[list] = None, year: Optional
                     'quantity': qty,
                     'proceeds': proceeds,
                     'cost_basis': cost_basis,
-                    'profit': profit,
-                    'year': yr
+                    'profit': proceeds - cost_basis,
+                    'year': int(pd.to_datetime(r['tx_date']).year),
                 })
-    return pd.DataFrame(rows)
+        for sym, lots in buys.items():
+            lots = [b for b in lots if b['qty'] > 1e-9]
+            if lots:
+                open_lots[(pid, sym)] = lots
+    return rows, open_lots

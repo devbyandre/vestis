@@ -43,5 +43,6 @@ export const qk = {
   alerts: () => ['alerts'],
   alertHistory: () => ['alerts', 'history'],
   kpis: (ids) => ['planning', 'kpis', ids],
+  taxSales: (ids, target) => ['planning', 'tax-sales', ids, target],
   settings: () => ['settings'],
 }

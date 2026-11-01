@@ -130,6 +130,7 @@ export default function TabSettings() {
         <div className="grid grid-cols-3 gap-3">
           <Field label="Tax rate (fraction)" type="number" value={form.tax_rate} onChange={set('tax_rate')} hint="e.g. 0.26375 = 25% + Soli" />
           <Field label="Yearly tax-free allowance (€)" type="number" value={form.tax_allowance} onChange={set('tax_allowance')} hint="Sparerpauschbetrag: 1000 single, 2000 joint" />
+          <Field label="Tax-free share of ETF gains (fraction)" type="number" value={form.fund_partial_exemption} onChange={set('fund_partial_exemption')} hint="Teilfreistellung: 0.3 for equity ETFs, 0 for bond ETFs" />
           <Field label="Valuation cache (hours)" type="number" value={form.valuation_cache_hours} onChange={set('valuation_cache_hours')} />
           <Field label="KPI cache (hours)" type="number" value={form.kpi_cache_hours} onChange={set('kpi_cache_hours')} />
         </div>

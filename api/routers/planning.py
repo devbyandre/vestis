@@ -170,6 +170,17 @@ def get_risk_over_time(portfolio_ids: Optional[str] = Query(None), aggregate: bo
     return _df(df)
 
 
+@router.get("/planning/tax-sales")
+def get_tax_sales(
+    portfolio_ids: Optional[str] = Query(None),
+    target_amount: Optional[float] = Query(None, ge=0),
+):
+    """This year's tax position and tax-aware sell suggestions: use the
+    remaining allowance, harvest losses, raise cash with the least tax."""
+    ids = [int(x) for x in portfolio_ids.split(",")] if portfolio_ids else None
+    return mw.plan_tax_sales(portfolio_ids=ids, target_amount=target_amount)
+
+
 @router.get("/planning/kpis")
 def get_kpis(portfolio_ids: Optional[str] = Query(None)):
     ids = [int(x) for x in portfolio_ids.split(",")] if portfolio_ids else None

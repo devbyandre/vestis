@@ -32,6 +32,7 @@ DEFAULT = {
     "vestis_url": "",
     "tax_rate": 0.25,
     "tax_allowance": 1000,
+    "fund_partial_exemption": 0.3,  # Teilfreistellung for equity ETFs/funds
     "valuation_cache_hours": 24,
     "kpi_cache_hours": 24,
     "yf_max_req_per_min": 45,

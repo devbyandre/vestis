@@ -5,6 +5,7 @@ import { planningApi, portfolioApi, settingsApi } from '../lib/api'
 import { qk } from '../lib/queryClient'
 import { fmt, pnlColor, plotlyConfig, clamp } from '../lib/utils'
 import { LoadingOverlay, ChartSkeleton, ErrorMsg, SortableTable, SectionHeader, Expander, Input, MetricCard } from '../components/ui'
+import TaxSelling from '../components/TaxSelling'
 
 const Plot = lazy(() =>
   // Vite's dev-mode CJS interop for this package can double-wrap the
@@ -532,6 +533,10 @@ export default function TabPlanning() {
 
       <Expander title="Target Allocation Settings">
         {settings ? <TargetSettings settings={settings} kpis={kpisRaw} onSave={(v) => saveMut.mutate(v)} saving={saveMut.isPending} /> : <LoadingOverlay />}
+      </Expander>
+
+      <Expander title="Tax-Optimised Selling">
+        <TaxSelling portfolioIds={ids} />
       </Expander>
 
       {isLoading ? <LoadingOverlay /> : error ? <ErrorMsg error={error} /> : (

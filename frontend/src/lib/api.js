@@ -118,6 +118,8 @@ export const planningApi = {
   kpis: (portfolio_ids) =>
     get('/planning/kpis', { portfolio_ids: portfolio_ids?.join(',') }),
   taxonomy: () => get('/planning/taxonomy'),
+  taxSales: (portfolio_ids, target_amount) =>
+    get('/planning/tax-sales', { portfolio_ids: portfolio_ids?.join(','), target_amount: target_amount || undefined }),
   portfolioSymbols: (portfolio_ids) =>
     get('/planning/portfolio-symbols', { portfolio_ids: portfolio_ids?.join(',') }),
   rebalancing: (portfolio_ids, retirement_year) =>

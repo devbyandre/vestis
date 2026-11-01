@@ -67,6 +67,11 @@ export const handlers = [
 
   http.get('/api/planning/kpis', () => HttpResponse.json([])),
   http.get('/api/planning/taxonomy', () => HttpResponse.json({})),
+  http.get('/api/planning/tax-sales', () => HttpResponse.json({
+    year: 2026, tax_rate: 0.26375, allowance: 1000, fund_partial_exemption: 0.3,
+    status: { taxable_base: 0, allowance_used: 0, allowance_left: 1000, tax_so_far: 0, carry_stock: 0, carry_general: 0 },
+    allowance_plan: null, loss_plan: null, cash_plan: null, crypto: [],
+  })),
   http.get('/api/planning/portfolio-symbols', () => HttpResponse.json([])),
   http.get('/api/planning/allocation-over-time', () => HttpResponse.json({ dates: [], series: {} })),
   http.get('/api/planning/risk-over-time', () => HttpResponse.json([])),
